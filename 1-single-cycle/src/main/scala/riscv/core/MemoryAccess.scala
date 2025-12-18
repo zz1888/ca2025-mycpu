@@ -90,7 +90,7 @@ class MemoryAccess extends Module {
 
         // TODO: Complete LHU (zero-extend halfword)
         // Hint: Fill upper bits with zero, then concatenate with halfword
-        InstructionsTypeL.lhu -> Cat(Fill(15,0.U),half),
+        InstructionsTypeL.lhu -> Cat(Fill(16,0.U),half),
 
         // LW: Load full word, no extension needed (completed example)
         InstructionsTypeL.lw  -> data
@@ -138,7 +138,7 @@ class MemoryAccess extends Module {
         // 1. Enable single byte strobe at appropriate position
         // 2. Shift byte data to correct position based on address
         writeStrobes(mem_address_index) := true.B
-        writeData := data(7:0) << (mem_address_index << 3)
+        writeData := data(7,0) << (mem_address_index << 3)
       }
       is(InstructionsTypeS.sh) {
         // TODO: Complete store halfword logic
@@ -148,13 +148,13 @@ class MemoryAccess extends Module {
           // TODO: Enable strobes for lower two bytes, no shifting needed
           writeStrobes(0) := true.B
           writeStrobes(1) := true.B
-          writeData := data(15:0)
+          writeData := data(15,0)
         }.otherwise {
           // Upper halfword (bytes 2-3)
           // TODO: Enable strobes for upper two bytes, apply appropriate shift
           writeStrobes(2) := true.B
           writeStrobes(3) := true.B
-          writeData := data(15:0) << 16.U
+          writeData := data(15,0) << 16.U
         }
       }
       is(InstructionsTypeS.sw) {

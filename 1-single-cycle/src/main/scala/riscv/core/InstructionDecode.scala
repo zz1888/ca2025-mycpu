@@ -201,7 +201,7 @@ class InstructionDecode extends Module {
     wbSource := RegWriteSource.Memory
   }
   // TODO: Determine when to write back PC+4
-  .elsewhen((!isjal) && (!isjalr)) {
+  .elsewhen((isJal) || (isJalr)) {
     wbSource := RegWriteSource.NextInstructionAddress
   }
 
@@ -212,7 +212,7 @@ class InstructionDecode extends Module {
   val aluOp1Sel = WireDefault(ALUOp1Source.Register)
   // TODO: Determine when to use PC as first operand
   // Hint: Consider instructions that need PC-relative addressing
-  when(isBranch || isjal || isAuipc) {
+  when(isBranch || isJal || isAuipc) {
     aluOp1Sel := ALUOp1Source.InstructionAddress
   }
 

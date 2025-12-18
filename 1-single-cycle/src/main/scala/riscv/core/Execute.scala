@@ -95,8 +95,8 @@ class Execute extends Module {
       InstructionsTypeB.bne  -> (io.reg1_data=/=io.reg2_data),
 
       // Signed comparison (need conversion to signed type)
-      InstructionsTypeB.blt  -> (io.reg1.asSInt<io.reg2.asSInt),
-      InstructionsTypeB.bge  -> (io.reg1.asSInt>=io.reg2.asSInt),
+      InstructionsTypeB.blt  -> (io.reg1_data.asSInt<io.reg2_data.asSInt),
+      InstructionsTypeB.bge  -> (io.reg1_data.asSInt>=io.reg2_data.asSInt),
 
       // Unsigned comparison
       InstructionsTypeB.bltu -> (io.reg1_data.asUInt>io.reg2_data.asUInt),
