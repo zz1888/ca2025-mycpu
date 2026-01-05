@@ -10,7 +10,7 @@ val chiselVersion = "3.6.1"
 
 // Root aggregate project
 lazy val root = (project in file("."))
-  .aggregate(common, minimal, singleCycle, mmioTrap, pipeline)
+  .aggregate(common, minimal, singleCycle, mmioTrap, pipeline , soc)
   .settings(
     name := "mycpu-root"
   )
@@ -119,4 +119,24 @@ lazy val pipeline = (project in file("3-pipeline"))
     addCompilerPlugin("edu.berkeley.cs" % "chisel3-plugin" % chiselVersion cross CrossVersion.full),
     Test / fork := true,
     Test / javaOptions += s"-Duser.dir=${(ThisBuild / baseDirectory).value}/3-pipeline",
+  )
+lazy val soc = (project in file("4-soc"))
+  .dependsOn(pipeline, common)
+  .settings(
+    name := "mycpu-soc",
+    libraryDependencies ++= Seq(
+      "edu.berkeley.cs" %% "chisel3" % chiselVersion,
+      "edu.berkeley.cs" %% "chiseltest"  % "0.6.0" % Test,   
+      "org.scalatest"   %% "scalatest"   % "3.2.17" % Test,  
+      "edu.berkeley.cs" %% "firrtl" % "1.6.0",
+    ),
+    scalacOptions ++= Seq(
+      "-language:reflectiveCalls",
+      "-feature",
+      "-Xcheckinit",
+      "-Wconf:cat=deprecation:s",
+    ),
+    addCompilerPlugin("edu.berkeley.cs" % "chisel3-plugin" % chiselVersion cross CrossVersion.full),
+    Test / fork := true,
+    Test / javaOptions += s"-Duser.dir=${(ThisBuild / baseDirectory).value}/4-soc",
   )
