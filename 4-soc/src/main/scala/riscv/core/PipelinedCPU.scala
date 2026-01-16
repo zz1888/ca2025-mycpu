@@ -146,6 +146,9 @@ class PipelinedCPU extends Module {
   // WB stage signals for JAL/JALR hazard detection (pipeline register delay fix)
   ctrl.io.regs_write_source_wb := mem2wb.io.output_regs_write_source
   ctrl.io.rd_wb                := mem2wb.io.output_regs_write_address
+  // Multiplier/divider control signals (M-extension)
+  ctrl.io.mul_busy := ex.io.mul_busy
+  ctrl.io.div_busy := ex.io.div_busy
 
   regs.io.write_enable  := mem2wb.io.output_regs_write_enable
   regs.io.write_address := mem2wb.io.output_regs_write_address
@@ -381,7 +384,9 @@ class PipelinedCPU extends Module {
   id.io.interrupt_handler_address := clint.io.id_interrupt_handler_address
   id.io.branch_hazard             := ctrl.io.branch_hazard
 
-  id2ex.io.stall := mem_stall
+  // Stall ID2EX for both memory operations and multiplier operations
+  val ex_busy = ex.io.mul_busy || ex.io.div_busy
+  id2ex.io.stall := mem_stall || ex_busy
   // Do not flush id2ex when mem_stall is active - except for JAL/JALR hazards!
   // When the memory is stalling (e.g., multi-cycle store), the id2ex register holds
   // the instruction waiting in EX stage. For load-use hazards, the flush is suppressed
@@ -425,7 +430,8 @@ class PipelinedCPU extends Module {
   ex.io.reg1_forward        := forwarding.io.reg1_forward_ex
   ex.io.reg2_forward        := forwarding.io.reg2_forward_ex
 
-  ex2mem.io.stall               := mem_stall
+  // Stall EX2MEM for both memory operations and multiplier operations
+  ex2mem.io.stall               := mem_stall || ex_busy
   ex2mem.io.regs_write_enable   := id2ex.io.output_regs_write_enable
   ex2mem.io.regs_write_source   := id2ex.io.output_regs_write_source
   ex2mem.io.regs_write_address  := id2ex.io.output_regs_write_address

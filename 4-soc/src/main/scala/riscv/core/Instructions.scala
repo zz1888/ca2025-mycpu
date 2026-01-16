@@ -8,11 +8,12 @@ import chisel3._
 import riscv.Parameters
 
 object InstructionTypes {
-  val L  = "b0000011".U
-  val I  = "b0010011".U
-  val S  = "b0100011".U
-  val RM = "b0110011".U
-  val B  = "b1100011".U
+  val L      = "b0000011".U
+  val I      = "b0010011".U
+  val S      = "b0100011".U
+  val RM     = "b0110011".U
+  val B      = "b1100011".U
+  val CUSTOM = "b0001011".U  // custom-0 for DSP extensions
 }
 
 object Instructions {
@@ -70,6 +71,16 @@ object InstructionsTypeM {
   val divu   = 5.U
   val rem    = 6.U
   val remu   = 7.U
+}
+
+object InstructionsTypeDSP {
+  val qmul16 = "b000".U  // Q15 fixed-point multiply
+  val sadd16 = "b001".U  // 16-bit saturating add
+  val ssub16 = "b010".U  // 16-bit saturating sub
+  val sadd32 = "b011".U  // 32-bit saturating add
+  val ssub32 = "b100".U  // 32-bit saturating sub
+  val qmul16r = "b101".U // Q15 fixed-point multiply with rounding
+  val sshl16 = "b110".U  // 16-bit saturating shift-left
 }
 
 object InstructionsTypeB {

@@ -231,6 +231,9 @@ class Control extends Module {
     // WB stage signals for JAL/JALR hazard detection
     val regs_write_source_wb = Input(UInt(2.W))                                  // mem2wb.io.output_regs_write_source
     val rd_wb                = Input(UInt(Parameters.PhysicalRegisterAddrWidth)) // mem2wb.io.output_regs_write_address
+    // Multiplier/divider control signals (M-extension)
+    val mul_busy = Input(Bool()) // ex.io.mul_busy
+    val div_busy = Input(Bool()) // ex.io.div_busy
 
     val if_flush = Output(Bool())
     val id_flush = Output(Bool())
@@ -371,6 +374,13 @@ class Control extends Module {
         // --- Condition 6: JAL/JALR hazard in WB (pipeline register delay) ---
         jal_jalr_hazard_wb
         // JAL/JALR in WB stage, but mem2wb output not yet stable for forwarding
+        
+        || // OR
+        
+        // --- Condition 7: Multiplier/divider busy (M-extension multi-cycle operation) ---
+        io.mul_busy || io.div_busy
+        // Multiplier/divider is computing, stall pipeline until result is ready
+        // Example: MUL/DIV x1, x2, x3 [EX, cycles 1-3]; ADD x4, x1, x5 [ID] → stall
   ) {
     // Stall action: Insert bubble and freeze pipeline
     //

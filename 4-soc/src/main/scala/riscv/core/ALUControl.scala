@@ -10,6 +10,8 @@ import riscv.core.InstructionTypes
 import riscv.core.Instructions
 import riscv.core.InstructionsTypeI
 import riscv.core.InstructionsTypeR
+import riscv.core.InstructionsTypeM
+import riscv.core.InstructionsTypeDSP
 
 class ALUControl extends Module {
   val io = IO(new Bundle {
@@ -41,21 +43,42 @@ class ALUControl extends Module {
       )
     }
     is(InstructionTypes.RM) {
-      io.alu_funct := MuxLookup(
-        io.funct3,
-        ALUFunctions.zero
-      )(
-        IndexedSeq(
-          InstructionsTypeR.add_sub -> Mux(io.funct7(5), ALUFunctions.sub, ALUFunctions.add),
-          InstructionsTypeR.sll     -> ALUFunctions.sll,
-          InstructionsTypeR.slt     -> ALUFunctions.slt,
-          InstructionsTypeR.sltu    -> ALUFunctions.sltu,
-          InstructionsTypeR.xor     -> ALUFunctions.xor,
-          InstructionsTypeR.or      -> ALUFunctions.or,
-          InstructionsTypeR.and     -> ALUFunctions.and,
-          InstructionsTypeR.sr      -> Mux(io.funct7(5), ALUFunctions.sra, ALUFunctions.srl)
+      // Check if this is M-extension (funct7 = 0x01) or R-type (funct7 = 0x00/0x20)
+      when(io.funct7 === 1.U) {
+        // M-extension instructions (RV32M)
+        io.alu_funct := MuxLookup(
+          io.funct3,
+          ALUFunctions.zero
+        )(
+          IndexedSeq(
+            InstructionsTypeM.mul    -> ALUFunctions.mul,
+            InstructionsTypeM.mulh   -> ALUFunctions.mulh,
+            InstructionsTypeM.mulhsu -> ALUFunctions.mulhsu,
+            InstructionsTypeM.mulhum -> ALUFunctions.mulhu,
+            InstructionsTypeM.div    -> ALUFunctions.div,
+            InstructionsTypeM.divu   -> ALUFunctions.divu,
+            InstructionsTypeM.rem    -> ALUFunctions.rem,
+            InstructionsTypeM.remu   -> ALUFunctions.remu
+          )
         )
-      )
+      }.otherwise {
+        // R-type instructions (RV32I)
+        io.alu_funct := MuxLookup(
+          io.funct3,
+          ALUFunctions.zero
+        )(
+          IndexedSeq(
+            InstructionsTypeR.add_sub -> Mux(io.funct7(5), ALUFunctions.sub, ALUFunctions.add),
+            InstructionsTypeR.sll     -> ALUFunctions.sll,
+            InstructionsTypeR.slt     -> ALUFunctions.slt,
+            InstructionsTypeR.sltu    -> ALUFunctions.sltu,
+            InstructionsTypeR.xor     -> ALUFunctions.xor,
+            InstructionsTypeR.or      -> ALUFunctions.or,
+            InstructionsTypeR.and     -> ALUFunctions.and,
+            InstructionsTypeR.sr      -> Mux(io.funct7(5), ALUFunctions.sra, ALUFunctions.srl)
+          )
+        )
+      }
     }
     is(InstructionTypes.B) {
       io.alu_funct := ALUFunctions.add
@@ -77,6 +100,23 @@ class ALUControl extends Module {
     }
     is(Instructions.auipc) {
       io.alu_funct := ALUFunctions.add
+    }
+    is(InstructionTypes.CUSTOM) {
+      // DSP extension instructions (custom-0)
+      io.alu_funct := MuxLookup(
+        io.funct3,
+        ALUFunctions.zero
+      )(
+        IndexedSeq(
+          InstructionsTypeDSP.qmul16 -> ALUFunctions.qmul16,
+          InstructionsTypeDSP.sadd16 -> ALUFunctions.sadd16,
+          InstructionsTypeDSP.ssub16 -> ALUFunctions.ssub16,
+          InstructionsTypeDSP.sadd32 -> ALUFunctions.sadd32,
+          InstructionsTypeDSP.ssub32 -> ALUFunctions.ssub32,
+          InstructionsTypeDSP.qmul16r -> ALUFunctions.qmul16r,
+          InstructionsTypeDSP.sshl16 -> ALUFunctions.sshl16
+        )
+      )
     }
   }
 }

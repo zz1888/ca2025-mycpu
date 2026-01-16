@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: MIT
-// MyCPU is freely redistributable under the MIT License. See the file
-// "LICENSE" for information on usage and redistribution of this file.
-
 package board.verilator
 
 import bus.AXI4LiteSlave
@@ -13,9 +10,9 @@ import chisel3.stage.ChiselStage
 import peripheral.DummySlave
 import peripheral.Uart
 import peripheral.VGA
+import peripheral.AudioPeripheral
 import riscv.core.CPU
 import riscv.Parameters
-import peripheral.AudioPeripheral    
 
 class Top extends Module {
   val io = IO(new Bundle {
@@ -38,11 +35,12 @@ class Top extends Module {
     val vga_y_pos       = Output(UInt(10.W)) // Current pixel Y position
 
     // UART peripheral outputs
-    val uart_txd       = Output(UInt(1.W)) // UART TX data
-    val uart_rxd       = Input(UInt(1.W))  // UART RX data
-    val uart_interrupt = Output(Bool())    // UART interrupt signal
-      // Audio peripheral outputs         // ← 加這些
-    val audio_sample = Output(UInt(16.W)) 
+    val uart_txd       = Output(UInt(1.W))   // UART TX data
+    val uart_rxd       = Input(UInt(1.W))    // UART RX data
+    val uart_interrupt = Output(Bool())      // UART interrupt signal
+
+    // Audio peripheral outputs
+    val audio_sample       = Output(UInt(16.W))
     val audio_sample_valid = Output(Bool())
 
     val cpu_debug_read_address     = Input(UInt(Parameters.PhysicalRegisterAddrWidth))
@@ -61,7 +59,8 @@ class Top extends Module {
   // UART peripheral (115200 baud standard rate)
   val uart = Module(new Uart(frequency = 50000000, baudRate = 115200))
 
-  val audio = Module(new AudioPeripheral) 
+  // Audio peripheral
+  val audio = Module(new AudioPeripheral)
 
   val cpu         = Module(new CPU)
   val dummy       = Module(new DummySlave)
@@ -69,20 +68,17 @@ class Top extends Module {
   val bus_switch  = Module(new BusSwitch)
 
   // Instruction fetch (external ROM in testbench)
-  io.instruction_address   := cpu.io.instruction_address
-  cpu.io.instruction       := io.instruction
+  io.instruction_address := cpu.io.instruction_address
+  cpu.io.instruction := io.instruction
   cpu.io.instruction_valid := io.instruction_valid
 
   // Terminate unused memory_bundle inputs with explicit values
-  // These signals are not used because memory access goes through AXI4-Lite channels,
-  // but Chisel requires all bundle inputs to be driven. Using explicit zeros instead
-  // of DontCare for deterministic simulation behavior and cleaner waveforms.
-  cpu.io.memory_bundle.read_data           := 0.U
-  cpu.io.memory_bundle.read_valid          := false.B
-  cpu.io.memory_bundle.write_valid         := false.B
+  cpu.io.memory_bundle.read_data := 0.U
+  cpu.io.memory_bundle.read_valid := false.B
+  cpu.io.memory_bundle.write_valid := false.B
   cpu.io.memory_bundle.write_data_accepted := false.B
-  cpu.io.memory_bundle.busy                := false.B
-  cpu.io.memory_bundle.granted             := false.B
+  cpu.io.memory_bundle.busy := false.B
+  cpu.io.memory_bundle.granted := false.B
 
   // Bus arbiter
   bus_arbiter.io.bus_request(0) := true.B
@@ -94,36 +90,37 @@ class Top extends Module {
   bus_switch.io.slaves(1) <> vga.io.channels
   bus_switch.io.slaves(2) <> uart.io.channels
   bus_switch.io.slaves(3) <> audio.io.channels
- for (i <- 4 until Parameters.SlaveDeviceCount) { 
+
+  for (i <- 4 until Parameters.SlaveDeviceCount) {
     bus_switch.io.slaves(i) <> dummy.io.channels
   }
 
   // VGA connections
-  vga.io.pixClock    := io.vga_pixclk
-  io.vga_hsync       := vga.io.hsync
-  io.vga_vsync       := vga.io.vsync
-  io.vga_rrggbb      := vga.io.rrggbb
+  vga.io.pixClock := io.vga_pixclk
+  io.vga_hsync := vga.io.hsync
+  io.vga_vsync := vga.io.vsync
+  io.vga_rrggbb := vga.io.rrggbb
   io.vga_activevideo := vga.io.activevideo
-  io.vga_x_pos       := vga.io.x_pos
-  io.vga_y_pos       := vga.io.y_pos
+  io.vga_x_pos := vga.io.x_pos
+  io.vga_y_pos := vga.io.y_pos
 
   // UART connections
-  io.uart_txd       := uart.io.txd
-  uart.io.rxd       := io.uart_rxd
+  io.uart_txd := uart.io.txd
+  uart.io.rxd := io.uart_rxd
   io.uart_interrupt := uart.io.signal_interrupt
 
-// Audio connections                    // ← 加這三行
+  // Audio connections
   io.audio_sample := audio.io.sample
   io.audio_sample_valid := audio.io.sample_valid
-  
+
   // Interrupt
   cpu.io.interrupt_flag := io.signal_interrupt
 
   // Debug interfaces
-  cpu.io.debug_read_address     := io.cpu_debug_read_address
-  io.cpu_debug_read_data        := cpu.io.debug_read_data
+  cpu.io.debug_read_address := io.cpu_debug_read_address
+  io.cpu_debug_read_data := cpu.io.debug_read_data
   cpu.io.csr_debug_read_address := io.cpu_csr_debug_read_address
-  io.cpu_csr_debug_read_data    := cpu.io.csr_debug_read_data
+  io.cpu_csr_debug_read_data := cpu.io.csr_debug_read_data
 }
 
 object VerilogGenerator extends App {

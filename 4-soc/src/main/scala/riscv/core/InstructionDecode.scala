@@ -56,10 +56,10 @@ class InstructionDecode extends Module {
       funct3 === InstructionsTypeCSR.csrrci ||
       funct3 === InstructionsTypeCSR.csrrsi
   )
-  val uses_rs1 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.I) ||
+  val uses_rs1 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.CUSTOM) || (opcode === InstructionTypes.I) ||
     (opcode === InstructionTypes.L) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B) ||
     (opcode === Instructions.jalr) || (opcode === Instructions.csr && !csr_uses_uimm)
-  val uses_rs2 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B)
+  val uses_rs2 = (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.CUSTOM) || (opcode === InstructionTypes.S) || (opcode === InstructionTypes.B)
 
   io.regs_reg1_read_address := Mux(uses_rs1, rs1, 0.U(Parameters.PhysicalRegisterAddrWidth))
   io.regs_reg2_read_address := Mux(uses_rs2, rs2, 0.U(Parameters.PhysicalRegisterAddrWidth))
@@ -96,7 +96,7 @@ class InstructionDecode extends Module {
     ALUOp1Source.Register
   )
   io.ex_aluop2_source := Mux(
-    opcode === InstructionTypes.RM,
+    opcode === InstructionTypes.RM || opcode === InstructionTypes.CUSTOM,
     ALUOp2Source.Register,
     ALUOp2Source.Immediate
   )
@@ -113,7 +113,7 @@ class InstructionDecode extends Module {
       Instructions.jalr  -> RegWriteSource.NextInstructionAddress
     )
   )
-  io.ex_reg_write_enable := (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.I) ||
+  io.ex_reg_write_enable := (opcode === InstructionTypes.RM) || (opcode === InstructionTypes.CUSTOM) || (opcode === InstructionTypes.I) ||
     (opcode === InstructionTypes.L) || (opcode === Instructions.auipc) || (opcode === Instructions.lui) ||
     (opcode === Instructions.jal) || (opcode === Instructions.jalr) || (opcode === Instructions.csr)
   io.ex_reg_write_address := io.instruction(11, 7)
