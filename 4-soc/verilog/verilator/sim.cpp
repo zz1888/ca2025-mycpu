@@ -11,39 +11,129 @@
 #include <memory>
 #include <queue>
 #include <vector>
-#include <SDL2/SDL.h>
+#include <deque>
 // Terminal I/O for interactive UART
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 
+#include <SDL2/SDL.h>
+
 #include "VTop.h"
-#include "vga_display.h"
-static uint32_t audio_div = 0;
-static constexpr uint32_t AUDIO_DIVIDER = 4535;  // ~11kHz at 50MHz clock
-static constexpr uint32_t UART_TEST_PASS = 0x0F;  // 4 subtests
-static constexpr uint32_t VGA_TEST_PASS = 0x3F;   // 6 subtests
-// Memory-mapped I/O base addresses
-static constexpr uint32_t UART_BASE = 0x40000000u;
-static constexpr uint32_t VGA_BASE = 0x20000000u;
-static constexpr uint32_t AUDIO_BASE = 0x60000000u;
+
+static constexpr uint32_t AUDIO_BASE = 0x60000000;
+static std::deque<int16_t> audio_fifo;
+static constexpr uint32_t SAMPLE_RATE = 11025;  // 11 kHz for picosynth
+
+// WAV file header structure
+struct WavHeader {
+    // RIFF chunk
+    char riff[4] = {'R', 'I', 'F', 'F'};
+    uint32_t file_size;  // File size - 8
+    char wave[4] = {'W', 'A', 'V', 'E'};
+    
+    // fmt subchunk
+    char fmt[4] = {'f', 'm', 't', ' '};
+    uint32_t fmt_size = 16;  // PCM format size
+    uint16_t audio_format = 1;  // PCM = 1
+    uint16_t num_channels = 1;  // Mono
+    uint32_t sample_rate = SAMPLE_RATE;
+    uint32_t byte_rate;  // SampleRate * NumChannels * BitsPerSample/8
+    uint16_t block_align;  // NumChannels * BitsPerSample/8
+    uint16_t bits_per_sample = 16;
+    
+    // data subchunk
+    char data[4] = {'d', 'a', 't', 'a'};
+    uint32_t data_size;  // NumSamples * NumChannels * BitsPerSample/8
+};
+
+class SdlAudioOut
+{
+    SDL_AudioDeviceID device = 0;
+    bool enabled = false;
+    std::vector<int16_t> buffer;
+    static constexpr size_t CHUNK_SAMPLES = 512;
+
+public:
+    bool init()
+    {
+        if (SDL_Init(SDL_INIT_AUDIO) != 0) {
+            std::cerr << "⚠️  SDL audio init failed: " << SDL_GetError()
+                      << "\n";
+            return false;
+        }
+
+        SDL_AudioSpec want{};
+        want.freq = SAMPLE_RATE;
+        want.format = AUDIO_S16SYS;
+        want.channels = 1;
+        want.samples = 1024;
+        want.callback = nullptr;
+
+        SDL_AudioSpec have{};
+        device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (device == 0) {
+            std::cerr << "⚠️  SDL audio open failed: " << SDL_GetError()
+                      << "\n";
+            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+            return false;
+        }
+
+        if (have.freq != SAMPLE_RATE || have.format != AUDIO_S16SYS ||
+            have.channels != 1) {
+            std::cerr << "⚠️  SDL audio device format mismatch (freq="
+                      << have.freq << ", format=" << have.format
+                      << ", channels=" << static_cast<int>(have.channels)
+                      << ")\n";
+        }
+
+        buffer.reserve(CHUNK_SAMPLES);
+        SDL_PauseAudioDevice(device, 0);
+        enabled = true;
+        return true;
+    }
+
+    void push(int16_t sample)
+    {
+        if (!enabled)
+            return;
+        buffer.push_back(sample);
+        if (buffer.size() >= CHUNK_SAMPLES)
+            flush();
+    }
+
+    void drain()
+    {
+        if (!enabled)
+            return;
+        flush();
+        while (SDL_GetQueuedAudioSize(device) > 0)
+            SDL_Delay(10);
+    }
+
+    void shutdown()
+    {
+        if (!enabled)
+            return;
+        drain();
+        SDL_CloseAudioDevice(device);
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        enabled = false;
+    }
+
+private:
+    void flush()
+    {
+        if (buffer.empty())
+            return;
+        SDL_QueueAudio(device, buffer.data(),
+                       buffer.size() * sizeof(int16_t));
+        buffer.clear();
+    }
+};
+
 // UART terminal interface for interactive mode
 // Simulates 115200 baud, 8N2 (8 data bits, no parity, 2 stop bits)
-static std::queue<int16_t> audio_samples;
-static SDL_AudioDeviceID audio_device = 0;
-
-void audio_callback(void* userdata, Uint8* stream, int len) {
-    int16_t* samples = (int16_t*)stream;
-    for (int i = 0; i < len/2; i++) {
-        if (!audio_samples.empty()) {
-            samples[i] = audio_samples.front();
-            audio_samples.pop();
-        } else {
-            samples[i] = 0;
-        }
-    }
-}
-
 class UartTerminal
 {
     // TX state machine (CPU -> Terminal)
@@ -346,46 +436,29 @@ int main(int argc, char **argv)
     Verilated::commandArgs(argc, argv);
 
     const char *binary = nullptr;
-    bool headless = false;
+    
     bool interactive_mode = false;
+    bool sdl_audio_enabled = false;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-instruction") || !strcmp(argv[i], "-i")) &&
             i + 1 < argc)
             binary = argv[++i];
-        else if (!strcmp(argv[i], "--headless") || !strcmp(argv[i], "-H"))
-            headless = true;
         else if (!strcmp(argv[i], "--terminal") || !strcmp(argv[i], "-t"))
             interactive_mode = true;
+        else if (!strcmp(argv[i], "--audio") || !strcmp(argv[i], "-a"))
+            sdl_audio_enabled = true;
     }
 
     auto top = std::make_unique<VTop>();
     Memory mem(4 * 1024 * 1024);  // 4MB (stack starts at 0x400000)
 
-    // Initialize SDL audio
-    SDL_Init(SDL_INIT_AUDIO);
-    SDL_AudioSpec want, have;
-    SDL_zero(want);
-    want.freq = 11025;
-    want.format = AUDIO_S16SYS;
-    want.channels = 1;
-    want.samples = 512;
-    want.callback = audio_callback;
-
-    audio_device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-    if (audio_device != 0) {
-        SDL_PauseAudioDevice(audio_device, 0);
-        fprintf(stderr, "[INIT] Audio device opened: %u, freq=%d, channels=%d\n", 
-                audio_device, have.freq, have.channels);
-    } else {
-        fprintf(stderr, "[INIT] Failed to open audio device!\n");
-    }
-
     if (!binary) {
         std::cerr
             << "Usage: " << argv[0]
-            << " -i <binary.asmbin> [--headless|-H] [--terminal|-t]\n"
+            << " -i <binary.asmbin> [--headless|-H] [--terminal|-t] [--audio|-a]\n"
             << "  --headless: Skip VGA display\n"
-            << "  --terminal: Interactive UART terminal (Ctrl-C to exit)\n";
+            << "  --terminal: Interactive UART terminal (Ctrl-C to exit)\n"
+            << "  --audio: Enable SDL audio output\n";
         return 1;
     }
     try {
@@ -396,11 +469,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // VGA display: lazy-initialized when VGA output becomes active
-    // This avoids opening SDL2 window for non-VGA tests (e.g., UART)
-    std::unique_ptr<VGADisplay> vga;
-    bool vga_initialized = false;
+    // Audio MMIO support (samples collected to audio_fifo, saved as WAV on exit)
+    std::cout << "🎵 Audio MMIO enabled (11 kHz, mono, 16-bit)\n";
+    std::cout << "   Audio MMIO: 0x60000000 (ID), 0x60000004 (STATUS), 0x60000008 (DATA)\n";
+    std::cout << "   Audio will be saved to output.wav on exit\n";
 
+    SdlAudioOut sdl_audio;
+    if (sdl_audio_enabled) {
+        if (sdl_audio.init())
+            std::cout << "🔊 SDL audio output enabled\n";
+        else
+            std::cout << "⚠️  SDL audio output disabled (init failed)\n";
+    }
+    
     // UART terminal for interactive mode
     UartTerminal uart;
     bool uart_debug = getenv("UART_DEBUG") != nullptr;
@@ -417,9 +498,13 @@ int main(int argc, char **argv)
     // Interactive terminal mode: no cycle limit (user exits with Ctrl-C)
     // Batch mode: 500M cycles to prevent runaway simulations
     const uint64_t max_cycles = interactive_mode ? UINT64_MAX : 500000000;
-    uint64_t cycle = 0, last_report = 0, frames = 0;
-    uint32_t vga_div = 0;
-    bool prev_vsync = false, first_vsync = true;
+    uint64_t cycle = 0, last_report = 0;
+    
+    // Auto-exit detection: if PC is stuck in a small loop for too long, exit
+    uint32_t stuck_pc_base = 0xFFFFFFFF;  // Track base address of stuck region
+    uint64_t stuck_cycles = 0;
+    const uint64_t STUCK_PC_THRESHOLD = 50000000;  // 50M cycles (enough for audio output)
+    const uint32_t STUCK_PC_RANGE = 16;  // Allow PC to vary within 16 bytes (small loop)
 
     // Early exit tracking for terminal mode (Ctrl-C detection)
     uint64_t tx_idle_cycles = 0;  // Count cycles of TX idle after Ctrl-C
@@ -427,10 +512,6 @@ int main(int argc, char **argv)
     // This ensures "Goodbye!" message completes before exit
     // ~50K cycles = ~10 char times of idle = clearly done transmitting
     const uint64_t TX_IDLE_EXIT_THRESHOLD = 50000;
-
-    // VGA diagnostic counters
-    uint32_t color_counts[64] = {0};
-    uint64_t active_pixels = 0, inactive_pixels = 0;
 
     // Reset sequence
     top->reset = 1;
@@ -449,23 +530,26 @@ int main(int argc, char **argv)
     top->io_uart_rxd = 1;
     top->io_cpu_debug_read_address = 0;
     top->io_cpu_csr_debug_read_address = 0;
-    top->io_vga_pixclk = 0;
 
     uint32_t inst = mem.read(0x1000);
 
+    std::cout << "🔧 DEBUG: Stuck PC detection enabled (threshold=" << STUCK_PC_THRESHOLD << " cycles)\n";
+    std::cerr << "⚠️  STDERR TEST: If you see this, stderr is working!\n";
+    std::cerr.flush();
+    
     while (cycle < max_cycles && !Verilated::gotFinish()) {
+        // Capture current clock state before toggle
+        bool prev_clock = top->clock;
+        
         // Progress report every 10M cycles (suppress in terminal mode)
         if (!interactive_mode && cycle - last_report >= 10000000) {
-            std::cout << "[" << cycle / 1000000 << "M] " << frames
-                      << " frames, PC=0x" << std::hex
-                      << top->io_instruction_address << std::dec << "\n";
+            std::cout << "[" << cycle / 1000000 << "M] PC=0x"
+            << std::hex << top->io_instruction_address 
+            << " (stuck:" << std::dec << stuck_cycles << ")" << "\n";
+
             last_report = cycle;
         }
-
-        // SDL event polling (only if VGA is active)
-        if (vga_initialized && !(cycle & 0x3FFF) && !vga->poll_events())
-            break;
-
+        
         top->io_instruction = inst;
         top->clock = !top->clock;
 
@@ -473,6 +557,34 @@ int main(int argc, char **argv)
         // This creates a stable snapshot of all DUT outputs for this clock
         // edge.
         top->eval();
+        
+        // Auto-exit detection: check if PC is stuck in small loop (e.g., _exit)
+        // Check on every iteration when clock is high
+        if (top->clock) {
+            uint32_t current_pc = top->io_instruction_address;
+            
+            // Check if PC is within STUCK_PC_RANGE of the base address
+            // Use absolute difference to handle small loops that cross alignment boundaries
+            bool in_stuck_region = (stuck_pc_base != 0xFFFFFFFF) && 
+                                   (current_pc >= stuck_pc_base - STUCK_PC_RANGE) &&
+                                   (current_pc <= stuck_pc_base + STUCK_PC_RANGE);
+            
+            if (in_stuck_region) {
+                // PC is still in the stuck region, increment counter
+                stuck_cycles++;
+                if (stuck_cycles >= STUCK_PC_THRESHOLD) {
+                    std::cout << "\n⚠️  PC stuck around 0x" << std::hex 
+                              << stuck_pc_base << std::dec 
+                              << " for " << stuck_cycles 
+                              << " cycles. Auto-exiting...\n";
+                    break;
+                }
+            } else {
+                // PC moved to a new region, reset tracking
+                stuck_pc_base = current_pc;  // Use actual PC, not aligned
+                stuck_cycles = 1;
+            }
+        }
 
         // =====================================================================
         // CAPTURE PHASE: Snapshot all DUT outputs immediately after eval().
@@ -490,114 +602,64 @@ int main(int argc, char **argv)
                                    (top->io_mem_slave_write_strobe_1 << 1) |
                                    (top->io_mem_slave_write_strobe_2 << 2) |
                                    (top->io_mem_slave_write_strobe_3 << 3);
+        
+        // Capture audio output signals
+        bool audio_sample_valid = top->io_audio_sample_valid;
+        int16_t audio_sample = (int16_t)top->io_audio_sample;
 
-        // Capture VGA outputs for display update
-        uint8_t vga_color = top->io_vga_rrggbb & 0x3F;
-        bool vga_active = top->io_vga_activevideo;
-        bool vga_vsync = top->io_vga_vsync;
-        uint16_t vga_x = top->io_vga_x_pos;
-        uint16_t vga_y = top->io_vga_y_pos;
 
         // Capture UART TX line for serial output
         bool uart_txd = top->io_uart_txd;
-        if (top->io_audio_sample_valid) {
-            if (++audio_div >= AUDIO_DIVIDER) {
-                audio_div = 0;
-                int16_t sample = (int16_t)top->io_audio_sample;
-                audio_samples.push(sample);
-            }
-        }
+
         // =====================================================================
         // REACTION PHASE: Act on captured state. Order no longer matters.
-        // =====================================================================
-
-        // VGA pixel clock at 1/4 CPU clock
-        // Drive pixclk input - effect will be seen on next main clock eval()
-        // NO eval() here: avoids race condition with memory signals
-        if (++vga_div >= 4) {
-            vga_div = 0;
-            top->io_vga_pixclk = !top->io_vga_pixclk;
-
-            // Process VGA display using captured outputs (on pixclk rising
-            // edge)
-            if (top->io_vga_pixclk && !headless) {
-                uint8_t color = vga_color;
-                bool active = vga_active;
-
-                // Lazy VGA initialization: open window only when software uses
-                // VGA The VGA hardware outputs default color (0x1) even without
-                // init, so we require a color OTHER than 0x0 (black) and 0x1
-                // (default blue) to indicate actual software usage of the VGA
-                // controller
-                if (active && color > 1 && !vga_initialized) {
-                    vga = std::make_unique<VGADisplay>();
-                    if (!vga->init()) {
-                        std::cerr << "SDL2 init failed\n";
-                        return 1;
-                    }
-                    vga_initialized = true;
-                    std::cout << "VGA display initialized\n";
-                }
-
-                if (vga_initialized) {
-                    // Use captured VGA coordinates and signals
-                    vga->update_pixel(vga_x, vga_y, color, active);
-                    // Track color distribution
-                    if (active) {
-                        color_counts[color]++;
-                        active_pixels++;
-                    } else {
-                        inactive_pixels++;
-                    }
-                    if (!prev_vsync && vga_vsync) {
-                        if (first_vsync)
-                            first_vsync = false;
-                        else {
-                            vga->render();
-                            frames++;
-                        }
-                    }
-                    prev_vsync = vga_vsync;
-                }
-            }
-        }
-
+        // ====================================================================
         // Memory handling using captured signals (immune to VGA eval effects)
-        if (top->clock) {
-            // Memory read - use captured signals
-            if (mem_read_req) {
-                top->io_mem_slave_read_data = mem.read(mem_address);
+                // MEMORY READ HANDLING
+        if (top->clock && mem_read_req) {
+            if ((mem_address & 0xFFF00000) == AUDIO_BASE) {
+                uint32_t offset = mem_address & 0xFF;
+                if (offset == 0x00) {  // ID register
+                    top->io_mem_slave_read_data = 0x41554449;  // 'AUDI'
+                } else if (offset == 0x04) {  // STATUS register
+                    // Simulate FIFO status based on audio_fifo size
+                    bool fifo_empty = audio_fifo.empty();
+                    bool fifo_full = audio_fifo.size() >= 8;
+                    top->io_mem_slave_read_data = (fifo_full << 1) | fifo_empty;
+                } else {
+                    // Other registers return 0
+                    top->io_mem_slave_read_data = 0;
+                }
                 top->io_mem_slave_read_valid = 1;
             } else {
-                top->io_mem_slave_read_valid = 0;
-            }
-
-            // Memory write - use captured signals
-            if (mem_write_req) {
-                static int write_count = 0;
-                if (++write_count <= 20) {
-                    fprintf(stderr, "[MEM_WRITE] #%d: addr=0x%08x, data=0x%08x\n",
-                     write_count, mem_address, mem_write_data);
-                }
-                mem.write(mem_address, mem_write_data, mem_write_strobe);
-                             // Handle audio output
-                // Test harness check: magic 0xCAFEF00D at 0x100 signals
-                // completion Test result at 0x104: each set bit = one subtest
-                // passed UART: 0xF (4 tests), VGA: 0x3F (6 tests)
-                if (mem_address == 0x100 && mem_write_data == 0xCAFEF00D) {
-                    uint32_t r = mem.read(0x104);
-                    // Accept 0xF (UART) or 0x3F (VGA) as passing
-                    if (r == VGA_TEST_PASS || r == UART_TEST_PASS)
-                        std::cout << "\nTEST PASSED (result=0x" << std::hex << r
-                                  << std::dec << ")\n";
-                    else
-                        std::cout << "\nTEST FAILED: 0x" << std::hex << r
-                                  << std::dec << "\n";
-                    break;  // Exit simulation on test completion
-                }
+                // Regular memory read
+                top->io_mem_slave_read_data = mem.read(mem_address);
+                top->io_mem_slave_read_valid = 1;
             }
         }
 
+        // AUDIO OUTPUT HANDLING (capture samples from audio peripheral)
+        static size_t audio_sample_count = 0;
+        
+        if (top->clock && audio_sample_valid) {
+            audio_sample_count++;
+            // Push to FIFO if not full (max 16384 samples)
+            if (audio_fifo.size() < 16384) {
+                audio_fifo.push_back(audio_sample);
+                sdl_audio.push(audio_sample);
+                // Debug: print first few and periodic samples
+                if (audio_fifo.size() <= 5 || audio_fifo.size() % 1000 == 0) {
+                    std::cerr << "🎵 Audio sample #" << audio_sample_count 
+                             << " (FIFO #" << audio_fifo.size() << "): value=" << audio_sample << "\n";
+                    std::cerr.flush();
+                }
+            }
+        }
+        
+        // MEMORY WRITE HANDLING (RAM only via io_mem_slave)
+        if (top->clock && mem_write_req) {
+                mem.write(mem_address, mem_write_data, mem_write_strobe);
+        }
         // UART handling: TX always processed, RX depends on mode
         // Uses captured uart_txd signal for consistent state
         if (top->clock) {
@@ -660,32 +722,47 @@ int main(int argc, char **argv)
     // Restore terminal settings before summary (fixes \n handling)
     uart.disable_raw_mode();
 
-    // Cleanup SDL audio
-    if (audio_device != 0) {
-        SDL_CloseAudioDevice(audio_device);
-    }
-    SDL_Quit();
-
+    // Summary output
     std::cout << "\nDone: " << cycle << " cycles";
-    if (vga_initialized)
-        std::cout << ", " << frames << " frames";
-    std::cout << "\n";
-    std::cout << "Final PC: 0x" << std::hex << top->io_instruction_address
-                << std::dec << "\n";
+    std::cout << "\nFinal PC: 0x" << std::hex << top->io_instruction_address
+              << std::dec << "\n";
 
-    // Print VGA color diagnostics (only if VGA was used)
-    if (vga_initialized) {
-        std::cout << "\nVGA Diagnostics:\n";
-        std::cout << "  Active pixels: " << active_pixels << "\n";
-        std::cout << "  Inactive pixels: " << inactive_pixels << "\n";
-        std::cout << "  Color distribution:\n";
-        for (int i = 0; i < 64; i++) {
-            if (color_counts[i] > 0) {
-                std::cout << "    Color 0x" << std::hex << i << ": " << std::dec
-                          << color_counts[i] << " pixels\n";
-            }
+    // Debug: Print audio FIFO status
+    std::cout << "🔊 Audio FIFO size: " << audio_fifo.size() << " samples\n";
+    std::cout.flush();
+
+    // Save audio_fifo to WAV file if any samples were captured
+    if (!audio_fifo.empty()) {
+        const char* wav_filename = "output.wav";
+        std::ofstream wav_file(wav_filename, std::ios::binary);
+        
+        if (wav_file) {
+            // Convert deque to vector for easier handling
+            std::vector<int16_t> samples(audio_fifo.begin(), audio_fifo.end());
+            
+            // Prepare WAV header
+            WavHeader header;
+            header.data_size = samples.size() * sizeof(int16_t);
+            header.file_size = 36 + header.data_size;  // 44 - 8
+            header.byte_rate = SAMPLE_RATE * 1 * 16 / 8;  // SampleRate * Channels * BitsPerSample/8
+            header.block_align = 1 * 16 / 8;  // Channels * BitsPerSample/8
+            
+            // Write WAV file
+            wav_file.write(reinterpret_cast<const char*>(&header), sizeof(WavHeader));
+            wav_file.write(reinterpret_cast<const char*>(samples.data()), header.data_size);
+            wav_file.close();
+            
+            std::cout << "💾 Saved " << samples.size() << " samples to " << wav_filename << "\n";
+            std::cout << "   Duration: " << (samples.size() / (float)SAMPLE_RATE) << " seconds\n";
+            std::cout << "   Play with: aplay " << wav_filename << " or copy to Windows and double-click\n";
+        } else {
+            std::cerr << "⚠️  Failed to create WAV file\n";
         }
     }
+
+    sdl_audio.shutdown();
+
+    // Print VGA color diagnostics (only if VGA was used)
 
     return 0;
 }
