@@ -12,7 +12,7 @@ LD := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy -O binary -j .text -j .data -j .rodata
 
 # Program targets (add new programs here)
-PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example
+PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-picosynth-minimal-v2 test-picosynth-debug test-synth-bypass test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example
 BINARIES := $(PROGRAMS:%=%.asmbin)
 
 %.asmbin: %.elf
@@ -250,6 +250,29 @@ test-picosynth-minimal.asmbin: test-picosynth-minimal.c picosynth.c picosynth.h 
 		test-picosynth-minimal.o picosynth-minimal.o init.o \
 		-lgcc
 	$(OBJCOPY) -O binary -j .text -j .data test-picosynth-minimal.elf $@
+
+test-picosynth-minimal-v2.asmbin: test-picosynth-minimal-v2.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-picosynth-minimal-v2.o test-picosynth-minimal-v2.c
+	$(CC) $(CFLAGS) -c -o picosynth-minimal-v2.o picosynth.c
+	$(CC) -o test-picosynth-minimal-v2.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-picosynth-minimal-v2.o picosynth-minimal-v2.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-picosynth-minimal-v2.elf $@
+
+test-synth-bypass.asmbin: test-synth-bypass.c mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-synth-bypass.o test-synth-bypass.c
+	$(CC) -o test-synth-bypass.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-synth-bypass.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-synth-bypass.elf $@
+
+test-picosynth-debug.asmbin: test-picosynth-debug.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-picosynth-debug.o test-picosynth-debug.c
+	$(CC) $(CFLAGS) -c -o picosynth-debug2.o picosynth.c
+	$(CC) -o test-picosynth-debug.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-picosynth-debug.o picosynth-debug2.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-picosynth-debug.elf $@
 
 test-malloc.asmbin: test-malloc.c picosynth.c mmio.h init.o link.lds
 	$(CC) $(CFLAGS) -c -o test-malloc.o test-malloc.c
