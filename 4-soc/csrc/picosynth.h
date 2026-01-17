@@ -81,6 +81,25 @@ static inline q15_t q15_sat(int32_t x)
     return (q15_t) x;
 }
 
+/* Q15 saturating add/sub using DSP instructions */
+static inline q15_t q15_add_sat(q15_t a, q15_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x1, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (q15_t) (result & 0xFFFF);
+}
+
+static inline q15_t q15_sub_sat(q15_t a, q15_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x2, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (q15_t) (result & 0xFFFF);
+}
+
 /* Waveform generator function pointer */
 typedef q15_t (*picosynth_wave_func_t)(q15_t phase);
 
@@ -122,7 +141,7 @@ typedef struct {
 /* Single-pole filter state */
 typedef struct {
     const q15_t *in;    /* Input signal pointer */
-    int32_t accum;      /* Internal accumulator (Q31) */
+    q15_t accum;        /* Internal accumulator (Q15) */
     q15_t coeff;        /* Smoothed cutoff: 0=DC, Q15_MAX=bypass */
     q15_t coeff_target; /* Target cutoff for smoothing */
 } picosynth_filter_t;
@@ -133,8 +152,8 @@ typedef struct {
  */
 typedef struct {
     const q15_t *in; /* Input signal pointer */
-    int32_t lp;      /* Low-pass state (Q15 scaled <<8 for precision) */
-    int32_t bp;      /* Band-pass state (Q15 scaled <<8) */
+    q15_t lp;        /* Low-pass state (Q15) */
+    q15_t bp;        /* Band-pass state (Q15) */
     q15_t f;         /* Frequency coefficient: 2*sin(pi*fc/fs) in Q15 */
     q15_t f_target;  /* Target frequency for smoothing */
     q15_t q; /* Damping factor. Higher means more damping (less resonance).
@@ -206,6 +225,10 @@ void picosynth_note_off(picosynth_t *s, uint8_t voice);
 
 /* Convert MIDI note (0-127) to phase increment */
 q15_t picosynth_midi_to_freq(uint8_t note);
+
+/* Debug helper: return raw octave8_freq entry (index 0-11). */
+q15_t picosynth_debug_octave8_freq(uint8_t idx);
+const q15_t *picosynth_debug_octave8_ptr(void);
 
 /* Initialize oscillator node. Set n->osc.detune after init if needed. */
 void picosynth_init_osc(picosynth_node_t *n,

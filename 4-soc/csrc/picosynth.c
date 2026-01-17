@@ -48,6 +48,25 @@ struct picosynth {
  */
 static uint32_t lfsr_seed = 0x12345678;
 
+/* Fast calloc to reduce allocator overhead in simulation.
+ * Falls back to malloc and clears memory with 32-bit stores when possible.
+ */
+static void *picosynth_calloc(size_t nmemb, size_t size)
+{
+    size_t n = nmemb * size;
+    uint8_t *p = (uint8_t *)malloc(n);
+    if (!p)
+        return NULL;
+    size_t words = n / 4;
+    size_t tail = n % 4;
+    uint32_t *w = (uint32_t *)p;
+    for (size_t i = 0; i < words; i++)
+        w[i] = 0;
+    for (size_t i = 0; i < tail; i++)
+        p[words * 4 + i] = 0;
+    return p;
+}
+
 static void voice_note_on(picosynth_voice_t *v, uint8_t note)
 {
     v->note = note;
@@ -186,12 +205,12 @@ picosynth_t *picosynth_create(uint8_t voices, uint8_t nodes)
     if (nodes > PICOSYNTH_MAX_NODES)
         return NULL;
 
-    picosynth_t *s = calloc(1, sizeof(picosynth_t));
+    picosynth_t *s = picosynth_calloc(1, sizeof(picosynth_t));
     if (!s)
         return NULL;
 
     s->num_voices = voices;
-    s->voices = calloc(voices, sizeof(picosynth_voice_t));
+    s->voices = picosynth_calloc(voices, sizeof(picosynth_voice_t));
     if (!s->voices) {
         free(s);
         return NULL;
@@ -199,7 +218,7 @@ picosynth_t *picosynth_create(uint8_t voices, uint8_t nodes)
 
     for (int i = 0; i < voices; i++) {
         s->voices[i].n_nodes = nodes;
-        s->voices[i].nodes = calloc(nodes, sizeof(picosynth_node_t));
+        s->voices[i].nodes = picosynth_calloc(nodes, sizeof(picosynth_node_t));
         if (!s->voices[i].nodes) {
             for (int j = 0; j < i; j++)
                 free(s->voices[j].nodes);
@@ -301,7 +320,11 @@ static const q15_t octave8_freq[NOTES_PER_OCTAVE] = {
 /* Multiply Q1.15 values with 64-bit intermediate to preserve precision */
 static q15_t q15_mul(q15_t a, q15_t b)
 {
-    return (q15_t) (((int64_t) a * b) >> 15);
+    uint32_t r;
+    asm volatile(".insn r 0x0B, 0x0, 0x00, %0, %1, %2"
+                 : "=r"(r)
+                 : "r"(a), "r"(b));
+    return (q15_t) (r & 0xFFFF);
 }
 
 /* Fast exponentiation: compute base^exp in Q1.15 domain. */
@@ -640,55 +663,48 @@ q15_t picosynth_process(picosynth_t *s)
                  * curve.
                  */
                 tmp[i] = (n->state & ENVELOPE_STATE_VALUE_MASK) >> 4;
-                tmp[i] = (tmp[i] * tmp[i]) >> 15; /* Squared curve */
+                tmp[i] = q15_mul((q15_t) tmp[i], (q15_t) tmp[i]); /* Squared curve */
                 if (n->env.sustain < 0)
                     tmp[i] = -tmp[i];
                 break;
             case PICOSYNTH_NODE_LP:
-                tmp[i] =
-                    (int32_t) (((int64_t) n->flt.accum * n->flt.coeff) >> 15);
+                tmp[i] = (int32_t) q15_mul(n->flt.accum, n->flt.coeff);
                 break;
             case PICOSYNTH_NODE_HP:
                 /* High-pass is the input signal minus the low-pass signal */
                 if (n->flt.in) {
-                    tmp[i] =
-                        (int32_t) (((int64_t) n->flt.accum * n->flt.coeff) >>
-                                   15);
-                    tmp[i] = *n->flt.in - tmp[i];
+                    q15_t lp = q15_mul(n->flt.accum, n->flt.coeff);
+                    tmp[i] = (int32_t) q15_sub_sat(*n->flt.in, lp);
                 } else {
                     tmp[i] = 0;
                 }
                 break;
             case PICOSYNTH_NODE_SVF_LP:
                 /* SVF low-pass output: scaled down from internal precision */
-                tmp[i] = n->svf.lp >> 8;
+                /* SVF low-pass output (Q15) */
+                tmp[i] = n->svf.lp;
                 break;
             case PICOSYNTH_NODE_SVF_HP: {
                 /* SVF high-pass: hp = in - lp - q*bp
                  * Computed at internal <<8 scale for consistency with state,
                  * then scaled down. Uses int64_t to prevent overflow.
                  */
-                int64_t in_val = n->svf.in ? ((int32_t) *n->svf.in) << 8 : 0;
-                int64_t q_bp = ((int64_t) n->svf.bp * n->svf.q) >> 15;
-                int64_t hp = in_val - n->svf.lp - q_bp;
-                /* Clamp to int32_t range before scaling */
-                if (hp > 0x7FFFFFFF)
-                    hp = 0x7FFFFFFF;
-                else if (hp < (-0x7FFFFFFF - 1))
-                    hp = (-0x7FFFFFFF - 1);
-                tmp[i] = (int32_t) (hp >> 8);
+                q15_t in_val = n->svf.in ? *n->svf.in : 0;
+                q15_t q_bp = q15_mul(n->svf.q, n->svf.bp);
+                tmp[i] = (int32_t) q15_sub_sat(q15_sub_sat(in_val, n->svf.lp),
+                                               q_bp);
                 break;
             }
             case PICOSYNTH_NODE_SVF_BP:
                 /* SVF band-pass output */
-                tmp[i] = n->svf.bp >> 8;
+                 tmp[i] = n->svf.bp;
                 break;
             case PICOSYNTH_NODE_MIX: {
-                int32_t sum = 0;
+                  q15_t sum = 0;
                 for (int j = 0; j < 3; j++)
                     if (n->mix.in[j])
-                        sum += *n->mix.in[j];
-                tmp[i] = sum;
+                        sum = q15_add_sat(sum, *n->mix.in[j]);
+                tmp[i] = (int32_t) sum;
                 break;
             }
             default:
@@ -697,7 +713,7 @@ q15_t picosynth_process(picosynth_t *s)
             }
 
             if (n->gain)
-                tmp[i] = (int32_t) (((int64_t) tmp[i] * *n->gain) >> 15);
+                tmp[i] = (int32_t) q15_mul((q15_t) tmp[i], *n->gain);
         }
 
         /* Pass 2: update state for next sample */
@@ -748,10 +764,10 @@ q15_t picosynth_process(picosynth_t *s)
                         int32_t sus_level = sus_abs << 4;
                         int32_t delta = val - sus_level;
                         /* Exponential decay of delta toward sustain */
-                        val =
-                            sus_level +
-                            (int32_t) (((int64_t) delta * n->env.decay_coeff) >>
-                                       15);
+                        q15_t delta_q15 = (q15_t) (delta >> 4);
+                        q15_t decay_step = q15_mul(delta_q15,
+                                                   n->env.decay_coeff);
+                        val = sus_level + ((int32_t) decay_step << 4);
                         if (val < sus_level)
                             val = sus_level;
                     } else if (mode == ENVELOPE_MODE_HOLD) {
@@ -783,8 +799,9 @@ q15_t picosynth_process(picosynth_t *s)
                     n->state = (int32_t) (((uint32_t) val) | mode);
                 } else {
                     /* Exponential release (mode cleared) */
-                    val = (int32_t) (((int64_t) val * n->env.release_coeff) >>
-                                     15);
+                    q15_t val_q15 = (q15_t) (val >> 4);
+                    q15_t rel = q15_mul(val_q15, n->env.release_coeff);
+                    val = (int32_t) rel << 4;
                     if (val < 16)
                         val = 0;
                     n->state = val; /* mode bits clear during release */
@@ -810,14 +827,9 @@ q15_t picosynth_process(picosynth_t *s)
                  * where output is the filtered signal from the previous sample.
                  * This implements a simple recursive filter.
                  */
-                int32_t input_val = n->flt.in ? *n->flt.in : 0;
-                int32_t delta = input_val - n->out;
-                int64_t acc = (int64_t) n->flt.accum + delta;
-                if (acc > 0x7FFFFFFF)
-                    acc = 0x7FFFFFFF;
-                else if (acc < (-0x7FFFFFFF - 1))
-                    acc = (-0x7FFFFFFF - 1);
-                n->flt.accum = (int32_t) acc;
+                q15_t input_val = n->flt.in ? *n->flt.in : 0;
+                q15_t delta = q15_sub_sat(input_val, n->out);
+                n->flt.accum = q15_add_sat(n->flt.accum, delta);
                 break;
             }
             case PICOSYNTH_NODE_SVF_LP:
@@ -839,39 +851,24 @@ q15_t picosynth_process(picosynth_t *s)
                  *
                  * States stored with <<8 scaling for precision.
                  */
-                int32_t in_val = n->svf.in ? ((int32_t) *n->svf.in) << 8 : 0;
-                int32_t lp = n->svf.lp;
-                int32_t bp = n->svf.bp;
+                q15_t in_val = n->svf.in ? *n->svf.in : 0;
+                q15_t lp = n->svf.lp;
+                q15_t bp = n->svf.bp;
 
                 /* Compute high-pass: hp = in - lp - q*bp
                  * Uses int64_t to prevent overflow with large <<8 scaled
                  * values.
                  */
-                int64_t q_bp = ((int64_t) bp * n->svf.q) >> 15;
-                int64_t hp64 = (int64_t) in_val - lp - q_bp;
-                if (hp64 > 0x7FFFFFFF)
-                    hp64 = 0x7FFFFFFF;
-                else if (hp64 < (-0x7FFFFFFF - 1))
-                    hp64 = (-0x7FFFFFFF - 1);
-                int32_t hp = (int32_t) hp64;
+                q15_t q_bp = q15_mul(n->svf.q, bp);
+                q15_t hp = q15_sub_sat(q15_sub_sat(in_val, lp), q_bp);
 
                 /* Update low-pass: lp += f*bp */
-                int32_t f_bp = (int32_t) (((int64_t) bp * n->svf.f) >> 15);
-                int64_t lp_new = (int64_t) lp + f_bp;
-                if (lp_new > 0x7FFFFFFF)
-                    lp_new = 0x7FFFFFFF;
-                else if (lp_new < (-0x7FFFFFFF - 1))
-                    lp_new = (-0x7FFFFFFF - 1);
-                n->svf.lp = (int32_t) lp_new;
+                q15_t f_bp = q15_mul(n->svf.f, bp);
+                q15_t f_hp = q15_mul(n->svf.f, hp);
 
                 /* Update band-pass: bp += f*hp */
-                int32_t f_hp = (int32_t) (((int64_t) hp * n->svf.f) >> 15);
-                int64_t bp_new = (int64_t) bp + f_hp;
-                if (bp_new > 0x7FFFFFFF)
-                    bp_new = 0x7FFFFFFF;
-                else if (bp_new < (-0x7FFFFFFF - 1))
-                    bp_new = (-0x7FFFFFFF - 1);
-                n->svf.bp = (int32_t) bp_new;
+                 n->svf.lp = q15_add_sat(lp, f_bp);
+                n->svf.bp = q15_add_sat(bp, f_hp);
                 break;
             }
             default:
@@ -897,7 +894,7 @@ q15_t picosynth_process(picosynth_t *s)
 
     if (s->num_voices > 1) {
         q15_t gain = Q15_MAX / s->num_voices;
-        out = (int32_t) (((int64_t) out * gain) >> 15);
+        out = (int32_t) q15_mul(q15_sat(out), gain);
     }
 
     /* DC blocker: y[n] = x[n] - x[n-1] + alpha * y[n-1]
@@ -905,18 +902,16 @@ q15_t picosynth_process(picosynth_t *s)
      * Uses int64_t to prevent overflow, clamps state. No rounding on feedback
      * (truncation ensures full decay to zero, rounding leaves residual DC).
      */
-    int64_t delta = (int64_t) out - (int64_t) s->dc_x_prev;
-    int64_t fb = ((int64_t) DC_BLOCK_ALPHA * (int64_t) s->dc_y_prev) >> 15;
-    int64_t acc = delta + fb;
+    q15_t out_q15 = q15_sat(out);
+    q15_t prev_x = q15_sat(s->dc_x_prev);
+    q15_t prev_y = q15_sat(s->dc_y_prev);
+    q15_t delta = q15_sub_sat(out_q15, prev_x);
+    q15_t fb = q15_mul(DC_BLOCK_ALPHA, prev_y);
+    q15_t dc_out = q15_add_sat(delta, fb);
+
 
     /* Clamp to int32 to keep state sane for the next sample */
-    if (acc > INT32_MAX)
-        acc = INT32_MAX;
-    else if (acc < INT32_MIN)
-        acc = INT32_MIN;
-
-    int32_t dc_out = (int32_t) acc;
-    s->dc_x_prev = out;
+    s->dc_x_prev = out_q15;
     s->dc_y_prev = dc_out;
 
     return soft_clip(dc_out);
