@@ -11,6 +11,7 @@ import peripheral.DummySlave
 import peripheral.Uart
 import peripheral.VGA
 import peripheral.AudioPeripheral
+import peripheral.HWSynth
 import riscv.core.CPU
 import riscv.Parameters
 
@@ -43,6 +44,10 @@ class Top extends Module {
     val audio_sample       = Output(UInt(16.W))
     val audio_sample_valid = Output(Bool())
 
+    // Hardware synth peripheral outputs
+    val hwsynth_sample       = Output(SInt(16.W))
+    val hwsynth_sample_valid = Output(Bool())
+
     val cpu_debug_read_address     = Input(UInt(Parameters.PhysicalRegisterAddrWidth))
     val cpu_debug_read_data        = Output(UInt(Parameters.DataWidth))
     val cpu_csr_debug_read_address = Input(UInt(Parameters.CSRRegisterAddrWidth))
@@ -61,6 +66,9 @@ class Top extends Module {
 
   // Audio peripheral
   val audio = Module(new AudioPeripheral)
+
+  // Hardware synth peripheral
+  val hwsynth = Module(new HWSynth)
 
   val cpu         = Module(new CPU)
   val dummy       = Module(new DummySlave)
@@ -90,8 +98,9 @@ class Top extends Module {
   bus_switch.io.slaves(1) <> vga.io.channels
   bus_switch.io.slaves(2) <> uart.io.channels
   bus_switch.io.slaves(3) <> audio.io.channels
+  bus_switch.io.slaves(4) <> hwsynth.io.channels
 
-  for (i <- 4 until Parameters.SlaveDeviceCount) {
+  for (i <- 5 until Parameters.SlaveDeviceCount) {
     bus_switch.io.slaves(i) <> dummy.io.channels
   }
 
@@ -112,6 +121,10 @@ class Top extends Module {
   // Audio connections
   io.audio_sample := audio.io.sample
   io.audio_sample_valid := audio.io.sample_valid
+
+  // Hardware synth connections
+  io.hwsynth_sample := hwsynth.io.sample
+  io.hwsynth_sample_valid := hwsynth.io.sample_valid
 
   // Interrupt
   cpu.io.interrupt_flag := io.signal_interrupt

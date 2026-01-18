@@ -9,10 +9,10 @@ LDFLAGS = --oformat=elf32-littleriscv
 AS := $(CROSS_COMPILE)as
 CC := $(CROSS_COMPILE)gcc
 LD := $(CROSS_COMPILE)ld
-OBJCOPY := $(CROSS_COMPILE)objcopy -O binary -j .text -j .data -j .rodata
+OBJCOPY := $(CROSS_COMPILE)objcopy -O binary -j .text -j .data -j .rodata -j .sdata
 
 # Program targets (add new programs here)
-PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-picosynth-minimal-v2 test-picosynth-debug test-synth-bypass test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example
+PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-picosynth-minimal-v2 test-picosynth-debug test-picosynth-manual test-synth-bypass test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example test-div test-div-simple test-process-single test-wave-only test-osc-only test-env-osc test-env-api test-env-manual test-env-simple synth-simple-v2 test-hwsynth test-hwsynth-audio test-hwsynth-full test-hwsynth-sync test-hwsynth-debug test-hwsynth-minimal
 BINARIES := $(PROGRAMS:%=%.asmbin)
 
 %.asmbin: %.elf
@@ -274,6 +274,22 @@ test-picosynth-debug.asmbin: test-picosynth-debug.c picosynth.c picosynth.h mmio
 		-lgcc
 	$(OBJCOPY) -O binary -j .text -j .data test-picosynth-debug.elf $@
 
+test-picosynth-manual.asmbin: test-picosynth-manual.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-picosynth-manual.o test-picosynth-manual.c
+	$(CC) $(CFLAGS) -c -o picosynth-manual.o picosynth.c
+	$(CC) -o test-picosynth-manual.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-picosynth-manual.o picosynth-manual.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-picosynth-manual.elf $@
+
+test-wave-only.asmbin: test-wave-only.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-wave-only.o test-wave-only.c
+	$(CC) $(CFLAGS) -c -o picosynth-wave.o picosynth.c
+	$(CC) -o test-wave-only.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-wave-only.o picosynth-wave.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-wave-only.elf $@
+
 test-malloc.asmbin: test-malloc.c picosynth.c mmio.h init.o link.lds
 	$(CC) $(CFLAGS) -c -o test-malloc.o test-malloc.c
 	$(CC) $(CFLAGS) -c -o picosynth-malloc.o picosynth.c
@@ -318,6 +334,92 @@ synth-adsr.asmbin: synth-adsr.c mmio.h init.o link.lds
 		-lgcc
 	$(OBJCOPY) -O binary -j .text -j .data synth-adsr.elf $@
 
+test-div.asmbin: test-div.c mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-div.o test-div.c
+	$(CC) -o test-div.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-div.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-div.elf $@
+
+test-div-simple.asmbin: test-div-simple.c mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-div-simple.o test-div-simple.c
+	$(CC) -o test-div-simple.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-div-simple.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data -j .sdata test-div-simple.elf $@
+
+test-process-single.asmbin: test-process-single.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-process-single.o test-process-single.c
+	$(CC) $(CFLAGS) -c -o picosynth-single.o picosynth.c
+	$(CC) -o test-process-single.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-process-single.o picosynth-single.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-process-single.elf $@
+
+test-osc-only.asmbin: test-osc-only.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-osc-only.o test-osc-only.c
+	$(CC) $(CFLAGS) -c -o picosynth-osc.o picosynth.c
+	$(CC) -o test-osc-only.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-osc-only.o picosynth-osc.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-osc-only.elf $@
+
+test-env-osc.asmbin: test-env-osc.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-env-osc.o test-env-osc.c
+	$(CC) $(CFLAGS) -c -o picosynth-env-osc.o picosynth.c
+	$(CC) -o test-env-osc.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-env-osc.o picosynth-env-osc.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-env-osc.elf $@
+
+test-env-api.asmbin: test-env-api.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-env-api.o test-env-api.c
+	$(CC) $(CFLAGS) -c -o picosynth-env-api.o picosynth.c
+	$(CC) -o test-env-api.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-env-api.o picosynth-env-api.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-env-api.elf $@
+
+test-env-manual.asmbin: test-env-manual.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-env-manual.o test-env-manual.c
+	$(CC) $(CFLAGS) -c -o picosynth-env-manual.o picosynth.c
+	$(CC) -o test-env-manual.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-env-manual.o picosynth-env-manual.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-env-manual.elf $@
+
+test-env-simple.asmbin: test-env-simple.c picosynth.c picosynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-env-simple.o test-env-simple.c
+	$(CC) $(CFLAGS) -c -o picosynth-env-simple.o picosynth.c
+	$(CC) -o test-env-simple.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-env-simple.o picosynth-env-simple.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-env-simple.elf $@
+
+# Simplified synth v2 - standalone, no picosynth dependency
+synth-simple-v2.asmbin: synth-simple-v2.c mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o synth-simple-v2.o synth-simple-v2.c
+	$(CC) -o synth-simple-v2.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		synth-simple-v2.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data synth-simple-v2.elf $@
+
+# Hardware synth test - uses HWSynth peripheral at 0x80000000
+test-hwsynth.asmbin: test-hwsynth.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth.o test-hwsynth.c
+	$(CC) -o test-hwsynth.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-hwsynth.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth.elf $@
+
+# Hardware synth audio test - HWSynth -> AudioPeripheral -> WAV output
+test-hwsynth-audio.asmbin: test-hwsynth-audio.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth-audio.o test-hwsynth-audio.c
+	$(CC) -o test-hwsynth-audio.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 \
+		test-hwsynth-audio.o init.o \
+		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-audio.elf $@
+
 init.o: init.S
 	$(AS) -R $(ASFLAGS) -o $@ $<
 
@@ -349,3 +451,29 @@ clean:
 $(PROGRAMS): %: %.asmbin
 
 .PHONY: all update clean $(PROGRAMS)
+
+
+# Complete hardware synth test - all features: SVF filter, AHDSR, waveforms, DC blocker
+test-hwsynth-full.asmbin: test-hwsynth-full.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth-full.o test-hwsynth-full.c
+	$(CC) -o test-hwsynth-full.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 		test-hwsynth-full.o init.o 		-lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-full.elf $@
+
+
+# Hardware synth synchronized test - uses audio FIFO for timing
+test-hwsynth-sync.asmbin: test-hwsynth-sync.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth-sync.o test-hwsynth-sync.c
+	$(CC) -o test-hwsynth-sync.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 test-hwsynth-sync.o init.o -lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-sync.elf $@
+
+# Hardware synth debug test
+test-hwsynth-debug.asmbin: test-hwsynth-debug.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth-debug.o test-hwsynth-debug.c
+	$(CC) -o test-hwsynth-debug.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 test-hwsynth-debug.o init.o -lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-debug.elf $@
+
+# Hardware synth minimal test - basic functionality check
+test-hwsynth-minimal.asmbin: test-hwsynth-minimal.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test-hwsynth-minimal.o test-hwsynth-minimal.c
+	$(CC) -o test-hwsynth-minimal.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 test-hwsynth-minimal.o init.o -lgcc
+	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-minimal.elf $@
