@@ -12,7 +12,7 @@ LD := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy -O binary -j .text -j .data -j .rodata -j .sdata
 
 # Program targets (add new programs here)
-PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-picosynth-minimal-v2 test-picosynth-debug test-picosynth-manual test-synth-bypass test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example test-div test-div-simple test-process-single test-wave-only test-osc-only test-env-osc test-env-api test-env-manual test-env-simple synth-simple-v2 test-hwsynth test-hwsynth-audio test-hwsynth-full test-hwsynth-sync test-hwsynth-debug test-hwsynth-minimal
+PROGRAMS := nyancat uart shell driver profile_min test-simple test-mul test-mul-direct test-mul-simple test-mul-debug test-mul-raw test-dsp test-dsp-simple test-q15-mul test-performance test-performance-simple test-perf-core test-env-debug test-process-debug test-audio test-picosynth-music test-picosynth-simple test-picosynth-minimal test-picosynth-minimal-v2 test-picosynth-debug test-picosynth-manual test-synth-bypass test-malloc test-array synth-optimized synth-simple synth-full synth-adsr example test-div test-div-simple test-process-single test-wave-only test-osc-only test-env-osc test-env-api test-env-manual test-env-simple synth-simple-v2 test-hwsynth test-hwsynth-audio test-hwsynth-full test-hwsynth-sync test-hwsynth-debug test-hwsynth-minimal picosynth-hw
 BINARIES := $(PROGRAMS:%=%.asmbin)
 
 %.asmbin: %.elf
@@ -477,3 +477,9 @@ test-hwsynth-minimal.asmbin: test-hwsynth-minimal.c hwsynth.h mmio.h init.o link
 	$(CC) $(CFLAGS) -c -o test-hwsynth-minimal.o test-hwsynth-minimal.c
 	$(CC) -o test-hwsynth-minimal.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 test-hwsynth-minimal.o init.o -lgcc
 	$(OBJCOPY) -O binary -j .text -j .data test-hwsynth-minimal.elf $@
+
+# Hardware synth music demo - plays melody using HWSynth peripheral
+picosynth-hw.asmbin: picosynth-hw.c hwsynth.h mmio.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o picosynth-hw.o picosynth-hw.c
+	$(CC) -o picosynth-hw.elf -T link.lds -nostartfiles -march=rv32im_zicsr -mabi=ilp32 picosynth-hw.o init.o -lgcc
+	$(OBJCOPY) -O binary -j .text -j .data -j .rodata picosynth-hw.elf $@

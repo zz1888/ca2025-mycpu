@@ -50,7 +50,7 @@ struct WavHeader {
 class SdlAudioOut
 {
     SDL_AudioDeviceID device = 0;
-    bool enabled = false;
+    bool enabled = true;
     std::vector<int16_t> buffer;
     static constexpr size_t CHUNK_SAMPLES = 512;
 
@@ -438,7 +438,7 @@ int main(int argc, char **argv)
     const char *binary = nullptr;
     
     bool interactive_mode = false;
-    bool sdl_audio_enabled = false;
+    bool sdl_audio_enabled = true;  // Enable SDL audio by default
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-instruction") || !strcmp(argv[i], "-i")) &&
             i + 1 < argc)
@@ -503,7 +503,7 @@ int main(int argc, char **argv)
     // Auto-exit detection: if PC is stuck in a small loop for too long, exit
     uint32_t stuck_pc_base = 0xFFFFFFFF;  // Track base address of stuck region
     uint64_t stuck_cycles = 0;
-    const uint64_t STUCK_PC_THRESHOLD = 50000000;  // 50M cycles (enough for audio output)
+    const uint64_t STUCK_PC_THRESHOLD = 5000000000;  // 50M cycles (enough for audio output)
     const uint32_t STUCK_PC_RANGE = 16;  // Allow PC to vary within 16 bytes (small loop)
 
     // Early exit tracking for terminal mode (Ctrl-C detection)

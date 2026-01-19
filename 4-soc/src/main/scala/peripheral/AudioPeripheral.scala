@@ -46,7 +46,7 @@ class AudioPeripheral extends Module {
   val addr_data   = addr === Reg.DATA.U
 
   // ================= Sample FIFO =================
-  // Depth 16384 to hold full 1-second audio buffer at 11025 Hz
+  // Depth 262144 to hold full 1-second audio buffer at 11025 Hz
   val fifo = Module(new Queue(UInt(16.W), entries = 16384))
   fifo.io.enq.valid := false.B
   fifo.io.enq.bits  := 0.U
