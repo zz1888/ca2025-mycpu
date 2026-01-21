@@ -81,7 +81,38 @@ static inline q15_t q15_sat(int32_t x)
     return (q15_t) x;
 }
 
-/* Q15 saturating add/sub using DSP instructions */
+/*============================================================================
+ * DSP Hardware Acceleration Functions
+ *
+ * Custom RISC-V instructions using opcode 0x0B (custom-0).
+ * Encoding: .insn r 0x0B, funct3, funct7, rd, rs1, rs2
+ *
+ * funct3 | Instruction | Description
+ * -------|-------------|------------------------------------------
+ *   0    | QMUL16      | Q15 16x16 multiply: (a * b) >> 15
+ *   1    | SADD16      | 16-bit saturating add
+ *   2    | SSUB16      | 16-bit saturating subtract
+ *   3    | SADD32      | 32-bit saturating add
+ *   4    | SSUB32      | 32-bit saturating subtract
+ *   5    | QMUL16R     | Q15 16x16 multiply with rounding
+ *   6    | SSHL16      | 16-bit saturating shift left
+ *   7    | QMUL32x16   | Q15 32x16 multiply: (a * b[15:0]) >> 15
+ *============================================================================*/
+
+/* Q15 16x16 multiply: (a * b) >> 15
+ * Input: two Q15 values [-1.0, +1.0)
+ * Output: Q15 product
+ */
+static inline q15_t q15_mul(q15_t a, q15_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x0, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (q15_t) (result & 0xFFFF);
+}
+
+/* 16-bit saturating add: clamps to [-32768, 32767] */
 static inline q15_t q15_add_sat(q15_t a, q15_t b)
 {
     uint32_t result;
@@ -91,6 +122,7 @@ static inline q15_t q15_add_sat(q15_t a, q15_t b)
     return (q15_t) (result & 0xFFFF);
 }
 
+/* 16-bit saturating subtract: clamps to [-32768, 32767] */
 static inline q15_t q15_sub_sat(q15_t a, q15_t b)
 {
     uint32_t result;
@@ -98,6 +130,232 @@ static inline q15_t q15_sub_sat(q15_t a, q15_t b)
                  : "=r"(result)
                  : "r"(a), "r"(b));
     return (q15_t) (result & 0xFFFF);
+}
+
+/* 32-bit saturating add: clamps to [INT32_MIN, INT32_MAX] */
+static inline int32_t i32_add_sat(int32_t a, int32_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x3, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (int32_t) result;
+}
+
+/* 32-bit saturating subtract: clamps to [INT32_MIN, INT32_MAX] */
+static inline int32_t i32_sub_sat(int32_t a, int32_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x4, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (int32_t) result;
+}
+
+/* Q15 16x16 multiply with rounding: (a * b + 0x4000) >> 15
+ * Provides better precision for cascaded multiplications.
+ */
+static inline q15_t q15_mul_r(q15_t a, q15_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x5, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (q15_t) (result & 0xFFFF);
+}
+
+/* 16-bit saturating shift left: (a << shamt) clamped to [-32768, 32767]
+ * shamt is taken from lower 5 bits of b.
+ */
+static inline q15_t q15_shl_sat(q15_t a, uint8_t shamt)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x6, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(shamt));
+    return (q15_t) (result & 0xFFFF);
+}
+
+/* Q15 32x16 multiply: (a * b) >> 15
+ * Input: 32-bit accumulator, 16-bit Q15 coefficient
+ * Output: 32-bit result
+ * Used for filter/envelope: ((int32_t) state * (int16_t) coeff) >> 15
+ */
+static inline int32_t qmul32x16(int32_t a, q15_t b)
+{
+    uint32_t result;
+    asm volatile(".insn r 0x0B, 0x7, 0x00, %0, %1, %2"
+                 : "=r"(result)
+                 : "r"(a), "r"(b));
+    return (int32_t) result;
+}
+
+/*============================================================================
+ * RV32M Integer Multiply/Divide Hardware Acceleration
+ *
+ * Standard RISC-V M extension instructions for integer arithmetic.
+ * These use the hardware multiplier/divider instead of software emulation.
+ *============================================================================*/
+
+/* 32-bit signed multiplication (lower 32 bits of 64-bit result)
+ * Uses RV32M MUL instruction
+ */
+static inline int32_t i32_mul(int32_t a, int32_t b)
+{
+    int32_t result;
+    asm volatile("mul %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit unsigned multiplication (lower 32 bits of 64-bit result)
+ * Uses RV32M MUL instruction
+ */
+static inline uint32_t u32_mul(uint32_t a, uint32_t b)
+{
+    uint32_t result;
+    asm volatile("mul %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit signed multiplication, high 32 bits of 64-bit result
+ * Uses RV32M MULH instruction
+ */
+static inline int32_t i32_mulh(int32_t a, int32_t b)
+{
+    int32_t result;
+    asm volatile("mulh %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit unsigned multiplication, high 32 bits of 64-bit result
+ * Uses RV32M MULHU instruction
+ */
+static inline uint32_t u32_mulhu(uint32_t a, uint32_t b)
+{
+    uint32_t result;
+    asm volatile("mulhu %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit signed*unsigned multiplication, high 32 bits of 64-bit result
+ * Uses RV32M MULHSU instruction
+ * Computes: (int64_t)a * (uint64_t)(uint32_t)b >> 32
+ */
+static inline int32_t i32_mulhsu(int32_t a, uint32_t b)
+{
+    int32_t result;
+    asm volatile("mulhsu %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit signed division
+ * Uses RV32M DIV instruction
+ * Note: Division by zero returns -1, overflow (INT32_MIN/-1) returns INT32_MIN
+ */
+static inline int32_t i32_div(int32_t a, int32_t b)
+{
+    int32_t result;
+    asm volatile("div %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit unsigned division
+ * Uses RV32M DIVU instruction
+ * Note: Division by zero returns 0xFFFFFFFF
+ */
+static inline uint32_t u32_div(uint32_t a, uint32_t b)
+{
+    uint32_t result;
+    asm volatile("divu %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit signed remainder
+ * Uses RV32M REM instruction
+ * Note: Remainder by zero returns dividend, overflow returns 0
+ */
+static inline int32_t i32_rem(int32_t a, int32_t b)
+{
+    int32_t result;
+    asm volatile("rem %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 32-bit unsigned remainder
+ * Uses RV32M REMU instruction
+ * Note: Remainder by zero returns dividend
+ */
+static inline uint32_t u32_rem(uint32_t a, uint32_t b)
+{
+    uint32_t result;
+    asm volatile("remu %0, %1, %2" : "=r"(result) : "r"(a), "r"(b));
+    return result;
+}
+
+/* 64-bit unsigned division using 32-bit hardware divider
+ * Computes (a_hi:a_lo) / b where b is 32-bit
+ * Returns 64-bit quotient
+ * Used for envelope rate calculations: ((int64_t)Q15_MAX << 4) / samples
+ */
+static inline uint64_t u64_div_u32(uint64_t a, uint32_t b)
+{
+    if (b == 0)
+        return 0xFFFFFFFFFFFFFFFFULL; /* Division by zero */
+
+    uint32_t a_hi = (uint32_t) (a >> 32);
+    uint32_t a_lo = (uint32_t) a;
+
+    /* Two-step division for 64-bit / 32-bit:
+     * 1. Divide high part: q_hi = a_hi / b, r_hi = a_hi % b
+     * 2. Combine remainder with low part and divide using shift-subtract
+     */
+    uint32_t q_hi, r_hi, q_lo;
+
+    asm volatile("divu %0, %1, %2" : "=r"(q_hi) : "r"(a_hi), "r"(b));
+    asm volatile("remu %0, %1, %2" : "=r"(r_hi) : "r"(a_hi), "r"(b));
+
+    /* Binary long division for (r_hi:a_lo) / b */
+    uint64_t remainder = ((uint64_t) r_hi << 32) | a_lo;
+    q_lo = 0;
+
+    for (int i = 31; i >= 0; i--) {
+        if (remainder >= ((uint64_t) b << i)) {
+            remainder -= ((uint64_t) b << i);
+            q_lo |= (1u << i);
+        }
+    }
+
+    return ((uint64_t) q_hi << 32) | q_lo;
+}
+
+/* 64-bit signed division using 32-bit hardware divider
+ * Handles sign conversion and calls u64_div_u32
+ */
+static inline int64_t i64_div_i32(int64_t a, int32_t b)
+{
+    if (b == 0)
+        return -1; /* Division by zero */
+
+    int neg = 0;
+    uint64_t ua;
+    uint32_t ub;
+
+    if (a < 0) {
+        neg = 1;
+        ua = (uint64_t) (-a);
+    } else {
+        ua = (uint64_t) a;
+    }
+
+    if (b < 0) {
+        neg ^= 1;
+        ub = (uint32_t) (-b);
+    } else {
+        ub = (uint32_t) b;
+    }
+
+    uint64_t result = u64_div_u32(ua, ub);
+    return neg ? -(int64_t) result : (int64_t) result;
 }
 
 /* Waveform generator function pointer */
@@ -141,7 +399,7 @@ typedef struct {
 /* Single-pole filter state */
 typedef struct {
     const q15_t *in;    /* Input signal pointer */
-    q15_t accum;        /* Internal accumulator (Q15) */
+    int32_t accum;      /* Internal accumulator (Q31) */
     q15_t coeff;        /* Smoothed cutoff: 0=DC, Q15_MAX=bypass */
     q15_t coeff_target; /* Target cutoff for smoothing */
 } picosynth_filter_t;
@@ -152,8 +410,8 @@ typedef struct {
  */
 typedef struct {
     const q15_t *in; /* Input signal pointer */
-    q15_t lp;        /* Low-pass state (Q15) */
-    q15_t bp;        /* Band-pass state (Q15) */
+    int32_t lp;      /* Low-pass state (Q15 scaled <<8 for precision) */
+    int32_t bp;      /* Band-pass state (Q15 scaled <<8) */
     q15_t f;         /* Frequency coefficient: 2*sin(pi*fc/fs) in Q15 */
     q15_t f_target;  /* Target frequency for smoothing */
     q15_t q; /* Damping factor. Higher means more damping (less resonance).

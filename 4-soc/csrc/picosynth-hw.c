@@ -188,7 +188,7 @@ static const melody_note_t melody[] = {
 };
 
 // For fast simulation, limit melody length
-#define FAST_SIM 1
+#define FAST_SIM 0
 #if FAST_SIM
 #define MAX_NOTES 8
 #define SAMPLE_LIMIT 500  // Samples per note

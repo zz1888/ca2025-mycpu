@@ -617,25 +617,9 @@ int main(int argc, char **argv)
         // Memory handling using captured signals (immune to VGA eval effects)
                 // MEMORY READ HANDLING
         if (top->clock && mem_read_req) {
-            if ((mem_address & 0xFFF00000) == AUDIO_BASE) {
-                uint32_t offset = mem_address & 0xFF;
-                if (offset == 0x00) {  // ID register
-                    top->io_mem_slave_read_data = 0x41554449;  // 'AUDI'
-                } else if (offset == 0x04) {  // STATUS register
-                    // Simulate FIFO status based on audio_fifo size
-                    bool fifo_empty = audio_fifo.empty();
-                    bool fifo_full = audio_fifo.size() >= 8;
-                    top->io_mem_slave_read_data = (fifo_full << 1) | fifo_empty;
-                } else {
-                    // Other registers return 0
-                    top->io_mem_slave_read_data = 0;
-                }
-                top->io_mem_slave_read_valid = 1;
-            } else {
-                // Regular memory read
                 top->io_mem_slave_read_data = mem.read(mem_address);
                 top->io_mem_slave_read_valid = 1;
-            }
+
         }
 
         // AUDIO OUTPUT HANDLING (capture samples from audio peripheral)

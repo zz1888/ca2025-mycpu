@@ -80,7 +80,8 @@ object InstructionsTypeDSP {
   val sadd32 = "b011".U  // 32-bit saturating add
   val ssub32 = "b100".U  // 32-bit saturating sub
   val qmul16r = "b101".U // Q15 fixed-point multiply with rounding
-  val sshl16 = "b110".U  // 16-bit saturating shift-left
+  val sshl16 = "b110".U   // 16-bit saturating shift-left
+  val qmul32x16 = "b111".U // Q15 32x16 multiply: (op1 * op2[15:0]) >> 15
 }
 
 object InstructionsTypeB {

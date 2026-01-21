@@ -117,6 +117,9 @@ class Execute extends Module {
   mul.io.op2 := reg2_data
   div.io.op1 := reg1_data
   div.io.op2 := reg2_data
+  div.io.op1_high := 0.U  // 64-bit extension: not used by RV32M
+  div.io.op2_high := 0.U
+  div.io.use_64 := false.B
   alu.io.mul_result := mul.io.result
   alu.io.div_result := div.io.result
   

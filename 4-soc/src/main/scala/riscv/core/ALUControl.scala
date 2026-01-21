@@ -114,7 +114,8 @@ class ALUControl extends Module {
           InstructionsTypeDSP.sadd32 -> ALUFunctions.sadd32,
           InstructionsTypeDSP.ssub32 -> ALUFunctions.ssub32,
           InstructionsTypeDSP.qmul16r -> ALUFunctions.qmul16r,
-          InstructionsTypeDSP.sshl16 -> ALUFunctions.sshl16
+          InstructionsTypeDSP.sshl16 -> ALUFunctions.sshl16,
+          InstructionsTypeDSP.qmul32x16 -> ALUFunctions.qmul32x16
         )
       )
     }

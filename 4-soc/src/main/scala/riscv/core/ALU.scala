@@ -23,7 +23,7 @@ object ALUFunctions extends ChiselEnum {
   val zero, add, sub, sll, slt, xor, or, and, srl, sra, sltu,
       mul, mulh, mulhsu, mulhu, div, divu, rem, remu,
       qmul16, sadd16, ssub16, sadd32, ssub32,
-      qmul16r, sshl16 = Value
+      qmul16r, sshl16, qmul32x16 = Value
 }
 
 /**
@@ -174,6 +174,15 @@ class ALU extends Module {
       val min = (-32768).S(32.W)
       val saturated = Mux(shifted > max, max, Mux(shifted < min, min, shifted))
       io.result := saturated(15, 0).asSInt.asUInt
+    }
+    is(ALUFunctions.qmul32x16) {
+      // Q15 32x16 multiply: (op1[31:0] * op2[15:0]) >> 15
+      // Used in picosynth for: ((int64_t) state * coeff) >> 15
+      val a = io.op1.asSInt                // 32-bit signed operand
+      val b = io.op2(15, 0).asSInt         // 16-bit signed operand (sign-extended)
+      val product = (a * b).asUInt         // 48-bit product
+      // Right shift by 15, keep lower 32 bits
+      io.result := (product >> 15)(31, 0)
     }
   }
 }

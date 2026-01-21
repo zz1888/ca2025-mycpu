@@ -51,19 +51,26 @@ static uint32_t lfsr_seed = 0x12345678;
 /* Fast calloc to reduce allocator overhead in simulation.
  * Falls back to malloc and clears memory with 32-bit stores when possible.
  */
+void *memset(void *dest, int c, unsigned int n)
+{
+    unsigned char *d = dest;
+    while (n--)
+        *d++ = (unsigned char) c;
+    return dest;
+}
 static void *picosynth_calloc(size_t nmemb, size_t size)
 {
-    size_t n = nmemb * size;
+    size_t n = u32_mul((uint32_t) nmemb, (uint32_t) size);
     uint8_t *p = (uint8_t *)malloc(n);
     if (!p)
         return NULL;
-    size_t words = n / 4;
-    size_t tail = n % 4;
+    size_t words = u32_div((uint32_t) n, 4);
+    size_t tail = u32_rem((uint32_t) n, 4);
     uint32_t *w = (uint32_t *)p;
     for (size_t i = 0; i < words; i++)
         w[i] = 0;
     for (size_t i = 0; i < tail; i++)
-        p[words * 4 + i] = 0;
+        p[u32_mul((uint32_t) words, 4) + i] = 0;
     return p;
 }
 
@@ -289,9 +296,10 @@ void picosynth_note_off(picosynth_t *s, uint8_t voice)
 /* Internal macros for frequency and envelope rate calculations */
 #define PICOSYNTH_HZ_TO_FREQ(hz) \
     ((q15_t) (((long) (hz) * Q15_MAX) / SAMPLE_RATE))
-#define PICOSYNTH_ENV_RATE_FROM_MS(ms)                                    \
-    (PICOSYNTH_MS(ms) > 0 ? (((int64_t) Q15_MAX << 4) / PICOSYNTH_MS(ms)) \
-                          : ((int32_t) Q15_MAX << 4))
+#define PICOSYNTH_ENV_RATE_FROM_MS(ms)                                           \
+    (PICOSYNTH_MS(ms) > 0                                                        \
+         ? (int32_t) i64_div_i32(((int64_t) Q15_MAX << 4), PICOSYNTH_MS(ms))     \
+         : ((int32_t) Q15_MAX << 4))
 #define PICOSYNTH_ENV_MIN_RATIO_Q15 \
     ((q15_t) (((int64_t) Q15_MAX + 5000) / 10000)) /* ~1e-4 */
 #define PICOSYNTH_ENV_MAX_RATIO_Q15 \
@@ -316,16 +324,6 @@ static const q15_t octave8_freq[NOTES_PER_OCTAVE] = {
     PICOSYNTH_HZ_TO_FREQ(7458.62), /* A#8 */
     PICOSYNTH_HZ_TO_FREQ(7902.13), /* B8 */
 };
-
-/* Multiply Q1.15 values with 64-bit intermediate to preserve precision */
-static q15_t q15_mul(q15_t a, q15_t b)
-{
-    uint32_t r;
-    asm volatile(".insn r 0x0B, 0x0, 0x00, %0, %1, %2"
-                 : "=r"(r)
-                 : "r"(a), "r"(b));
-    return (q15_t) (r & 0xFFFF);
-}
 
 /* Fast exponentiation: compute base^exp in Q1.15 domain. */
 static q15_t pow_q15(q15_t base, uint32_t exp)
@@ -389,14 +387,14 @@ static void env_update_exp_coeffs(picosynth_env_t *env)
 
     uint32_t decay_samples =
         env->decay > 0
-            ? (decay_span + (uint32_t) env->decay - 1) / (uint32_t) env->decay
+            ? u32_div(decay_span + (uint32_t) env->decay - 1, (uint32_t) env->decay)
             : 1;
-    q15_t target = (q15_t) (((int64_t) sus_level << 15) / peak);
+    q15_t target = (q15_t) ((int64_t) i64_div_i32((int64_t) sus_level << 15, (int32_t) peak));
     env->decay_coeff = env_calc_exp_coeff(decay_samples, target);
 
     uint32_t release_samples =
         env->release > 0
-            ? (peak + (uint32_t) env->release - 1) / (uint32_t) env->release
+            ? u32_div(peak + (uint32_t) env->release - 1, (uint32_t) env->release)
             : 1;
     if (release_samples < PICOSYNTH_FAST_RELEASE_SAMPLES)
         release_samples = PICOSYNTH_FAST_RELEASE_SAMPLES;
@@ -409,8 +407,8 @@ q15_t picosynth_midi_to_freq(uint8_t note)
     if (note > 119)
         note = 119; /* Clamp to B9 */
 
-    int octave = note / NOTES_PER_OCTAVE;
-    int idx = note % NOTES_PER_OCTAVE;
+    int octave = i32_div((int32_t) note, NOTES_PER_OCTAVE);
+    int idx = i32_rem((int32_t) note, NOTES_PER_OCTAVE);
     int shift = BASE_OCTAVE - octave;
     if (shift >= 0)
         return octave8_freq[idx] >> shift;
@@ -456,7 +454,7 @@ void picosynth_init_env_ms(picosynth_node_t *n,
         .attack = (int32_t) PICOSYNTH_ENV_RATE_FROM_MS(params->atk_ms),
         .hold = (int32_t) PICOSYNTH_MS(params->hold_ms),
         .decay = (int32_t) PICOSYNTH_ENV_RATE_FROM_MS(params->dec_ms),
-        .sustain = (q15_t) (((int32_t) params->sus_pct * Q15_MAX) / 100),
+        .sustain = (q15_t) (i32_div(i32_mul((int32_t) params->sus_pct, Q15_MAX), 100)),
         .release = (int32_t) PICOSYNTH_ENV_RATE_FROM_MS(params->rel_ms),
     };
     picosynth_init_env(n, gain, &p);
@@ -512,7 +510,7 @@ q15_t picosynth_svf_freq(uint16_t fc_hz)
     /* Calculate table index with interpolation
      * idx = fc * 64 / fs, but we use fc * 64 * 256 / fs for fractional part
      */
-    uint32_t scaled = ((uint32_t) fc_hz * 64 * 256) / SAMPLE_RATE;
+    uint32_t scaled = u32_div(u32_mul(u32_mul((uint32_t) fc_hz, 64), 256), SAMPLE_RATE);
     uint8_t idx = (uint8_t) (scaled >> 8);
     uint8_t frac = (uint8_t) (scaled & 0xFF);
 
@@ -524,10 +522,10 @@ q15_t picosynth_svf_freq(uint16_t fc_hz)
     /* Linear interpolation between table entries */
     int32_t s0 = svf_sin_table[idx];
     int32_t s1 = svf_sin_table[idx + 1];
-    int32_t sin_val = s0 + (((s1 - s0) * frac) >> 8);
+    int32_t sin_val = s0 + ((i32_mul(s1 - s0, (int32_t) frac) >> 8));
 
     /* f = 2 * sin(...), but we limit to avoid instability */
-    int32_t f = sin_val * 2;
+    int32_t f = sin_val << 1;
     if (f > Q15_MAX)
         f = Q15_MAX;
 
@@ -616,7 +614,7 @@ static q15_t soft_clip(int32_t x)
     uint32_t a = abs_x >> 3;
     if (a > Q15_MAX / 4)
         a = Q15_MAX / 4;
-    return q15_sat(picosynth_sine_impl((q15_t) a) * sign);
+    return q15_sat(i32_mul(picosynth_sine_impl((q15_t) a), sign));
 }
 
 q15_t picosynth_process(picosynth_t *s)
@@ -663,48 +661,45 @@ q15_t picosynth_process(picosynth_t *s)
                  * curve.
                  */
                 tmp[i] = (n->state & ENVELOPE_STATE_VALUE_MASK) >> 4;
-                tmp[i] = q15_mul((q15_t) tmp[i], (q15_t) tmp[i]); /* Squared curve */
+                tmp[i] = i32_mul(tmp[i], tmp[i]) >> 15; /* Squared curve */
                 if (n->env.sustain < 0)
                     tmp[i] = -tmp[i];
                 break;
             case PICOSYNTH_NODE_LP:
-                tmp[i] = (int32_t) q15_mul(n->flt.accum, n->flt.coeff);
+                tmp[i] =
+                    qmul32x16(n->flt.accum, n->flt.coeff);
                 break;
             case PICOSYNTH_NODE_HP:
                 /* High-pass is the input signal minus the low-pass signal */
                 if (n->flt.in) {
-                    q15_t lp = q15_mul(n->flt.accum, n->flt.coeff);
-                    tmp[i] = (int32_t) q15_sub_sat(*n->flt.in, lp);
+                    tmp[i] = qmul32x16(n->flt.accum, n->flt.coeff);
+                    tmp[i] = *n->flt.in - tmp[i];
                 } else {
                     tmp[i] = 0;
                 }
                 break;
             case PICOSYNTH_NODE_SVF_LP:
                 /* SVF low-pass output: scaled down from internal precision */
-                /* SVF low-pass output (Q15) */
-                tmp[i] = n->svf.lp;
+                tmp[i] = n->svf.lp >> 8;
                 break;
             case PICOSYNTH_NODE_SVF_HP: {
-                /* SVF high-pass: hp = in - lp - q*bp
-                 * Computed at internal <<8 scale for consistency with state,
-                 * then scaled down. Uses int64_t to prevent overflow.
-                 */
-                q15_t in_val = n->svf.in ? *n->svf.in : 0;
-                q15_t q_bp = q15_mul(n->svf.q, n->svf.bp);
-                tmp[i] = (int32_t) q15_sub_sat(q15_sub_sat(in_val, n->svf.lp),
-                                               q_bp);
+                /* SVF high-pass: hp = in - lp - q*bp */
+                int32_t in_val = n->svf.in ? ((int32_t) *n->svf.in) << 8 : 0;
+                int32_t q_bp = qmul32x16(n->svf.bp, n->svf.q);
+                int32_t hp = i32_sub_sat(i32_sub_sat(in_val, n->svf.lp), q_bp);
+                tmp[i] = hp >> 8;
                 break;
             }
             case PICOSYNTH_NODE_SVF_BP:
                 /* SVF band-pass output */
-                 tmp[i] = n->svf.bp;
+                tmp[i] = n->svf.bp >> 8;
                 break;
             case PICOSYNTH_NODE_MIX: {
-                  q15_t sum = 0;
+                int32_t sum = 0;
                 for (int j = 0; j < 3; j++)
                     if (n->mix.in[j])
-                        sum = q15_add_sat(sum, *n->mix.in[j]);
-                tmp[i] = (int32_t) sum;
+                        sum += *n->mix.in[j];
+                tmp[i] = sum;
                 break;
             }
             default:
@@ -713,7 +708,7 @@ q15_t picosynth_process(picosynth_t *s)
             }
 
             if (n->gain)
-                tmp[i] = (int32_t) q15_mul((q15_t) tmp[i], *n->gain);
+                tmp[i] = qmul32x16(tmp[i], *n->gain);
         }
 
         /* Pass 2: update state for next sample */
@@ -764,10 +759,9 @@ q15_t picosynth_process(picosynth_t *s)
                         int32_t sus_level = sus_abs << 4;
                         int32_t delta = val - sus_level;
                         /* Exponential decay of delta toward sustain */
-                        q15_t delta_q15 = (q15_t) (delta >> 4);
-                        q15_t decay_step = q15_mul(delta_q15,
-                                                   n->env.decay_coeff);
-                        val = sus_level + ((int32_t) decay_step << 4);
+                        val =
+                            sus_level +
+                            qmul32x16(delta, n->env.decay_coeff); // HW accelerated
                         if (val < sus_level)
                             val = sus_level;
                     } else if (mode == ENVELOPE_MODE_HOLD) {
@@ -799,9 +793,7 @@ q15_t picosynth_process(picosynth_t *s)
                     n->state = (int32_t) (((uint32_t) val) | mode);
                 } else {
                     /* Exponential release (mode cleared) */
-                    q15_t val_q15 = (q15_t) (val >> 4);
-                    q15_t rel = q15_mul(val_q15, n->env.release_coeff);
-                    val = (int32_t) rel << 4;
+                    val = qmul32x16(val, n->env.release_coeff);
                     if (val < 16)
                         val = 0;
                     n->state = val; /* mode bits clear during release */
@@ -827,9 +819,9 @@ q15_t picosynth_process(picosynth_t *s)
                  * where output is the filtered signal from the previous sample.
                  * This implements a simple recursive filter.
                  */
-                q15_t input_val = n->flt.in ? *n->flt.in : 0;
-                q15_t delta = q15_sub_sat(input_val, n->out);
-                n->flt.accum = q15_add_sat(n->flt.accum, delta);
+                int32_t input_val = n->flt.in ? *n->flt.in : 0;
+                int32_t delta = input_val - n->out;
+                n->flt.accum = i32_add_sat(n->flt.accum, delta);
                 break;
             }
             case PICOSYNTH_NODE_SVF_LP:
@@ -851,24 +843,22 @@ q15_t picosynth_process(picosynth_t *s)
                  *
                  * States stored with <<8 scaling for precision.
                  */
-                q15_t in_val = n->svf.in ? *n->svf.in : 0;
-                q15_t lp = n->svf.lp;
-                q15_t bp = n->svf.bp;
+                int32_t in_val = n->svf.in ? ((int32_t) *n->svf.in) << 8 : 0;
+                int32_t lp = n->svf.lp;
+                int32_t bp = n->svf.bp;
 
-                /* Compute high-pass: hp = in - lp - q*bp
-                 * Uses int64_t to prevent overflow with large <<8 scaled
-                 * values.
-                 */
-                q15_t q_bp = q15_mul(n->svf.q, bp);
-                q15_t hp = q15_sub_sat(q15_sub_sat(in_val, lp), q_bp);
+
+                /* Compute high-pass: hp = in - lp - q*bp */
+                int32_t q_bp = qmul32x16(bp, n->svf.q);
+                int32_t hp = i32_sub_sat(i32_sub_sat(in_val, lp), q_bp);
 
                 /* Update low-pass: lp += f*bp */
-                q15_t f_bp = q15_mul(n->svf.f, bp);
-                q15_t f_hp = q15_mul(n->svf.f, hp);
+                int32_t f_bp = qmul32x16(bp, n->svf.f);
+                n->svf.lp = i32_add_sat(lp, f_bp);
 
                 /* Update band-pass: bp += f*hp */
-                 n->svf.lp = q15_add_sat(lp, f_bp);
-                n->svf.bp = q15_add_sat(bp, f_hp);
+                int32_t f_hp = qmul32x16(hp, n->svf.f);
+                n->svf.bp = i32_add_sat(bp, f_hp);
                 break;
             }
             default:
@@ -893,25 +883,20 @@ q15_t picosynth_process(picosynth_t *s)
     }
 
     if (s->num_voices > 1) {
-        q15_t gain = Q15_MAX / s->num_voices;
-        out = (int32_t) q15_mul(q15_sat(out), gain);
+        q15_t gain = (q15_t) i32_div(Q15_MAX, (int32_t) s->num_voices);
+        out = qmul32x16(out, gain);
     }
 
     /* DC blocker: y[n] = x[n] - x[n-1] + alpha * y[n-1]
      * Removes DC offset introduced by waveshaping and asymmetric waveforms.
-     * Uses int64_t to prevent overflow, clamps state. No rounding on feedback
+     * Uses hardware saturation to prevent overflow. No rounding on feedback
      * (truncation ensures full decay to zero, rounding leaves residual DC).
      */
-    q15_t out_q15 = q15_sat(out);
-    q15_t prev_x = q15_sat(s->dc_x_prev);
-    q15_t prev_y = q15_sat(s->dc_y_prev);
-    q15_t delta = q15_sub_sat(out_q15, prev_x);
-    q15_t fb = q15_mul(DC_BLOCK_ALPHA, prev_y);
-    q15_t dc_out = q15_add_sat(delta, fb);
+    int32_t delta = i32_sub_sat(out, s->dc_x_prev);
+    int32_t fb = qmul32x16(s->dc_y_prev, DC_BLOCK_ALPHA);
+    int32_t dc_out = i32_add_sat(delta, fb);
 
-
-    /* Clamp to int32 to keep state sane for the next sample */
-    s->dc_x_prev = out_q15;
+    s->dc_x_prev = out;
     s->dc_y_prev = dc_out;
 
     return soft_clip(dc_out);
@@ -919,7 +904,7 @@ q15_t picosynth_process(picosynth_t *s)
 
 q15_t picosynth_wave_saw(q15_t phase)
 {
-    return phase * 2 - Q15_MAX;
+    return (phase << 1) - Q15_MAX;
 }
 
 q15_t picosynth_wave_square(q15_t phase)
@@ -932,19 +917,19 @@ q15_t picosynth_wave_triangle(q15_t phase)
     int32_t r = (int32_t) phase << 1;
     if (r > Q15_MAX)
         r = Q15_MAX - (r - Q15_MAX);
-    return q15_sat(r * 2 - Q15_MAX);
+    return q15_sat((r << 1) - Q15_MAX);
 }
 
 q15_t picosynth_wave_falling(q15_t phase)
 {
-    return Q15_MAX - phase * 2;
+    return Q15_MAX - (phase << 1);
 }
 
 q15_t picosynth_wave_exp(q15_t phase)
 {
     q15_t p = Q15_MAX - phase;
-    p = (p * p) >> 15;
-    p = (p * p) >> 15;
+    p = q15_mul(p, p);
+    p = q15_mul(p, p);
     return p;
 }
 
